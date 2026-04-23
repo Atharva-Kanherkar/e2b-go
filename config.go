@@ -9,6 +9,7 @@ import (
 const (
 	defaultAPIBaseURL        = "https://api.e2b.app"
 	defaultRequestTimeout    = 30 * time.Second
+	defaultConnectTimeout    = 5 * time.Minute
 	defaultDomain            = "e2b.app"
 	defaultEnvdPort          = 49983
 	defaultLegacySandboxUser = "user"
@@ -47,6 +48,13 @@ func durationToWholeSeconds(value time.Duration) int {
 		return 0
 	}
 	return int((value + time.Second - 1) / time.Second)
+}
+
+func connectTimeoutSeconds(value time.Duration) int {
+	if value <= 0 {
+		value = defaultConnectTimeout
+	}
+	return durationToWholeSeconds(value)
 }
 
 func usesLegacySandboxUser(envdVersion string) bool {
