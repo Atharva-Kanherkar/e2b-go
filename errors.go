@@ -22,6 +22,10 @@ var (
 	// ErrSandboxDestroyed is returned by any operation on a Sandbox whose
 	// Destroy has already been called.
 	ErrSandboxDestroyed = errors.New("e2b: sandbox is destroyed")
+
+	// ErrVolumeNotFound indicates the volume ID is unknown to the control
+	// plane.
+	ErrVolumeNotFound = errors.New("e2b: volume not found")
 )
 
 func normalizeHTTPError(statusCode int, body string, notFoundErr error) error {
