@@ -8,8 +8,9 @@ been open since October 2025 with no upstream movement. This repo fills that
 gap with a battle-tested client extracted from a production Go codebase
 ([AgentClash](https://github.com/agentclash/agentclash)).
 
-> **Status:** initial port — compiles, unit tests pass, no integration tests
-> running against a real E2B yet.
+> **Status:** parity-focused beta — unit tests pass, `go test -race ./...`
+> passes, and the core sandbox + volume runtime surface is implemented. Live
+> integration tests against a real E2B environment are still missing.
 
 ## Install
 
@@ -56,20 +57,68 @@ func main() {
 ## Surface
 
 ```go
-// Control plane
+// Control plane / lifecycle
 e2b.NewClient(apiKey string) *Client
 e2b.NewClientWithConfig(Config) *Client
 (*Client).CreateSandbox(ctx, CreateRequest) (*Sandbox, error)
+(*Client).ListSandboxes(ctx, ListSandboxesRequest) (ListSandboxesResponse, error)
+(*Client).GetSandboxInfo(ctx, sandboxID) (SandboxInfo, error)
+(*Client).ConnectSandbox(ctx, ConnectSandboxRequest) (*Sandbox, error)
+(*Client).ListSnapshots(ctx, ListSnapshotsRequest) (ListSnapshotsResponse, error)
+(*Client).DeleteSnapshot(ctx, snapshotID) (bool, error)
+(*Client).CreateVolume(ctx, name) (*Volume, error)
+(*Client).ConnectVolume(ctx, volumeID) (*Volume, error)
+(*Client).GetVolumeInfo(ctx, volumeID) (VolumeAndToken, error)
+(*Client).ListVolumes(ctx) ([]VolumeInfo, error)
+(*Client).DestroyVolume(ctx, volumeID) (bool, error)
 
-// Sandbox
+// Sandbox lifecycle / metadata
 (*Sandbox).ID() string
 (*Sandbox).TemplateID() string
 (*Sandbox).EnvdURL() string
+(*Sandbox).GetHost(port int) string
+(*Sandbox).Connect(ctx, timeout) error
+(*Sandbox).GetInfo(ctx) (SandboxInfo, error)
+(*Sandbox).Pause(ctx) (bool, error)
+(*Sandbox).SetTimeout(ctx, timeout) error
+(*Sandbox).GetMetrics(ctx, SandboxMetricsRequest) ([]SandboxMetric, error)
+(*Sandbox).CreateSnapshot(ctx, CreateSnapshotRequest) (SnapshotInfo, error)
+(*Sandbox).ListSnapshots(ctx, ListSnapshotsRequest) (ListSnapshotsResponse, error)
+(*Sandbox).Kill(ctx) error
+
+// Sandbox filesystem
 (*Sandbox).ReadFile(ctx, path) ([]byte, error)
 (*Sandbox).WriteFile(ctx, path, content) error
 (*Sandbox).ListFiles(ctx, prefix) ([]FileInfo, error)
+(*Sandbox).ListDir(ctx, path, depth) ([]EntryInfo, error)
+(*Sandbox).Stat(ctx, path) (EntryInfo, error)
+(*Sandbox).Exists(ctx, path) (bool, error)
+(*Sandbox).MakeDir(ctx, path) (bool, error)
+(*Sandbox).Rename(ctx, oldPath, newPath) (EntryInfo, error)
+(*Sandbox).Remove(ctx, path) error
+(*Sandbox).WatchDir(ctx, path, WatchOptions, onEvent) (*WatchHandle, error)
+
+// Commands / PTY
 (*Sandbox).Exec(ctx, ExecRequest) (ExecResult, error)
+(*Sandbox).ListProcesses(ctx) ([]ProcessInfo, error)
+(*Sandbox).StartCommand(ctx, CommandStartRequest) (*CommandHandle, error)
+(*Sandbox).ConnectProcess(ctx, pid, CommandConnectOptions) (*CommandHandle, error)
+(*Sandbox).CreatePTY(ctx, PTYStartRequest) (*CommandHandle, error)
+(*Sandbox).ConnectPTY(ctx, pid, PTYConnectOptions) (*CommandHandle, error)
 (*Sandbox).Destroy(ctx) error
+
+// Volumes
+(*Volume).ID() string
+(*Volume).Name() string
+(*Volume).Destroy(ctx) (bool, error)
+(*Volume).List(ctx, path, depth) ([]VolumeEntryInfo, error)
+(*Volume).MakeDir(ctx, path, VolumeWriteOptions) (VolumeEntryInfo, error)
+(*Volume).Stat(ctx, path) (VolumeEntryInfo, error)
+(*Volume).Exists(ctx, path) (bool, error)
+(*Volume).UpdateMetadata(ctx, path, VolumeMetadataOptions) (VolumeEntryInfo, error)
+(*Volume).ReadFile(ctx, path) ([]byte, error)
+(*Volume).WriteFile(ctx, path, content, VolumeWriteOptions) (VolumeEntryInfo, error)
+(*Volume).Remove(ctx, path) error
 ```
 
 ### Error sentinels
@@ -81,6 +130,7 @@ Branch on these with `errors.Is`:
 - `e2b.ErrFileNotFound` — file operation hit a missing path.
 - `e2b.ErrSandboxDestroyed` — you called a method on a Sandbox whose
   `Destroy` has already run.
+- `e2b.ErrVolumeNotFound` — control plane doesn't know the volume ID.
 
 ## What's in `CreateRequest`
 
@@ -97,13 +147,15 @@ Branch on these with `errors.Is`:
 
 ## Architecture
 
-Two transports:
+Three transports:
 
 - **Control plane** — REST calls to `api.e2b.app/sandboxes` for create /
-  destroy. See [`client.go`](./client.go).
+  destroy, plus sandbox metadata, snapshots, and team volumes.
 - **Envd** — [ConnectRPC](https://connectrpc.com) to the envd agent running
   inside each sandbox, for filesystem + process operations. Uses generated
   stubs from `github.com/e2b-dev/infra/packages/shared`.
+- **Volume content API** — REST calls to `api.e2b.app/volumecontent/...`
+  authenticated with the per-volume bearer token returned by the control plane.
 
 When envd responses don't come through (older envd, RPC blipped,
 filesystem call returning `NOT_FOUND` misleadingly), `AllowShellFallback`
@@ -111,15 +163,16 @@ retries via `sh -c` exec for `ReadFile` / `ListFiles`. Default off.
 
 ## Status
 
-- ✅ Sandbox create / destroy
-- ✅ File read / write / list (envd RPC + shell fallback)
-- ✅ Process exec with streaming stdout/stderr
+- ✅ Sandbox create / destroy / connect / info / pause / timeout / metrics / snapshots
+- ✅ File read / write / list / stat / exists / mkdir / rename / remove / watch
+- ✅ Background commands, process reconnect/list/stdin/kill, and PTY sessions
+- ✅ Persistent volume create / connect / list / destroy and content operations
 - ✅ `apt-get` additional-packages install at create time
-- ✅ Unit tests for wire format + error normalization
+- ✅ Unit tests for control-plane wire format, ConnectRPC streams, and error normalization
+- ✅ `go test -race ./...`
 - ⏳ Integration tests against a real E2B
-- ⏳ Streaming exec (caller-side stdout/stderr reader)
-- ⏳ Sandbox pause / resume
-- ⏳ Upload / download by stream (not in memory)
+- ⏳ Signed upload / download URL helpers
+- ⏳ Git convenience wrappers from the JS / Python SDKs
 
 ## Relationship to E2B upstream
 
