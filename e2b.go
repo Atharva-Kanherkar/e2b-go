@@ -2,6 +2,7 @@ package e2b
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -72,8 +73,7 @@ func (c *Client) CreateSandbox(ctx context.Context, request CreateRequest) (*San
 
 	if len(request.AdditionalPackages) > 0 {
 		if err := sb.installAdditionalPackages(ctx, request.AdditionalPackages); err != nil {
-			_ = sb.Destroy(ctx)
-			return nil, err
+			return nil, c.cleanupSandboxAfterCreateFailure(sb, err)
 		}
 	}
 
@@ -94,4 +94,14 @@ type sandboxTransport struct {
 	record        sandboxRecord
 	processClient processconnect.ProcessClient
 	filesClient   filesystemconnect.FilesystemClient
+}
+
+func (c *Client) cleanupSandboxAfterCreateFailure(sb *Sandbox, createErr error) error {
+	cleanupCtx, cancel := context.WithTimeout(context.Background(), c.config.requestTimeout())
+	defer cancel()
+
+	if err := sb.Destroy(cleanupCtx); err != nil {
+		return errors.Join(createErr, fmt.Errorf("cleanup sandbox after create failure: %w", err))
+	}
+	return createErr
 }

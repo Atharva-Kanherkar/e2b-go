@@ -19,6 +19,8 @@ import (
 type Sandbox struct {
 	mu                 sync.Mutex
 	client             sandboxTransport
+	destroying         bool
+	destroyWait        chan struct{}
 	closed             bool
 	allowShellFallback bool
 }
@@ -243,27 +245,51 @@ func (s *Sandbox) Exec(ctx context.Context, request ExecRequest) (ExecResult, er
 // first call hits the control plane. Returns nil when the sandbox was
 // already gone.
 func (s *Sandbox) Destroy(ctx context.Context) error {
-	s.mu.Lock()
-	if s.closed {
-		s.mu.Unlock()
-		return nil
-	}
-	s.closed = true
-	s.mu.Unlock()
-
-	if err := s.client.api.destroySandbox(ctx, s.client.record.SandboxID); err != nil {
-		if errors.Is(err, ErrSandboxNotFound) {
+	for {
+		s.mu.Lock()
+		switch {
+		case s.closed:
+			s.mu.Unlock()
 			return nil
+		case s.destroying:
+			wait := s.destroyWait
+			s.mu.Unlock()
+
+			select {
+			case <-wait:
+				continue
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		default:
+			wait := make(chan struct{})
+			s.destroying = true
+			s.destroyWait = wait
+			s.mu.Unlock()
+
+			err := s.client.api.destroySandbox(ctx, s.client.record.SandboxID)
+
+			s.mu.Lock()
+			s.destroying = false
+			s.destroyWait = nil
+			if err == nil || errors.Is(err, ErrSandboxNotFound) {
+				s.closed = true
+			}
+			close(wait)
+			s.mu.Unlock()
+
+			if err == nil || errors.Is(err, ErrSandboxNotFound) {
+				return nil
+			}
+			return err
 		}
-		return err
 	}
-	return nil
 }
 
 func (s *Sandbox) ensureActive() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.closed {
+	if s.closed || s.destroying {
 		return ErrSandboxDestroyed
 	}
 	return nil
