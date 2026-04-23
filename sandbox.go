@@ -8,10 +8,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"connectrpc.com/connect"
-	filesystempb "github.com/e2b-dev/infra/packages/shared/pkg/grpc/envd/filesystem"
-	processpb "github.com/e2b-dev/infra/packages/shared/pkg/grpc/envd/process"
 )
 
 // Sandbox is a handle to a live E2B microVM. Methods are safe for
@@ -26,22 +22,36 @@ type Sandbox struct {
 }
 
 // ID returns the E2B sandbox identifier.
-func (s *Sandbox) ID() string { return s.client.record.SandboxID }
+func (s *Sandbox) ID() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.client.record.SandboxID
+}
 
 // TemplateID returns the template the sandbox was cloned from.
-func (s *Sandbox) TemplateID() string { return s.client.record.TemplateID }
+func (s *Sandbox) TemplateID() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.client.record.TemplateID
+}
 
 // EnvdURL returns the envd base URL for this sandbox.
-func (s *Sandbox) EnvdURL() string { return s.client.api.envdBaseURL(s.client.record) }
+func (s *Sandbox) EnvdURL() string {
+	s.mu.Lock()
+	transport := s.client
+	s.mu.Unlock()
+	return transport.api.envdBaseURL(transport.record)
+}
 
 // ReadFile returns the contents of a file inside the sandbox.
 // When AllowShellFallback is set and the envd HTTP call fails, a
 // shell-based `cat` is tried as a backstop.
 func (s *Sandbox) ReadFile(ctx context.Context, path string) ([]byte, error) {
-	if err := s.ensureActive(); err != nil {
+	transport, err := s.activeTransport()
+	if err != nil {
 		return nil, err
 	}
-	content, err := s.client.api.readFile(ctx, s.client.record, path)
+	content, err := transport.api.readFile(ctx, transport.record, path)
 	if err == nil {
 		return content, nil
 	}
@@ -58,20 +68,22 @@ func (s *Sandbox) ReadFile(ctx context.Context, path string) ([]byte, error) {
 // WriteFile writes content to the given path inside the sandbox,
 // creating parent directories as needed.
 func (s *Sandbox) WriteFile(ctx context.Context, path string, content []byte) error {
-	if err := s.ensureActive(); err != nil {
+	transport, err := s.activeTransport()
+	if err != nil {
 		return err
 	}
-	return s.client.api.writeFile(ctx, s.client.record, path, content)
+	return transport.api.writeFile(ctx, transport.record, path, content)
 }
 
 // ListFiles enumerates files beneath the given prefix, up to 32 levels
 // deep. Directories are skipped. When AllowShellFallback is set and the
 // envd RPC fails, a `find` backstop is used.
 func (s *Sandbox) ListFiles(ctx context.Context, prefix string) ([]FileInfo, error) {
-	if err := s.ensureActive(); err != nil {
+	transport, err := s.activeTransport()
+	if err != nil {
 		return nil, err
 	}
-	items, err := s.listFilesRPC(ctx, prefix)
+	items, err := s.listFilesRPC(ctx, transport, prefix)
 	if err == nil {
 		return items, nil
 	}
@@ -83,32 +95,6 @@ func (s *Sandbox) ListFiles(ctx context.Context, prefix string) ([]FileInfo, err
 		return nil, errors.Join(err, fmt.Errorf("fallback list: %w", ferr))
 	}
 	return fallback, nil
-}
-
-func (s *Sandbox) listFilesRPC(ctx context.Context, prefix string) ([]FileInfo, error) {
-	req := connect.NewRequest(&filesystempb.ListDirRequest{
-		Path:  prefix,
-		Depth: 32,
-	})
-	if authHeader := legacySandboxAuthHeader(s.client.record.EnvdVersion); authHeader != "" {
-		req.Header().Set("Authorization", authHeader)
-	}
-	s.client.api.setEnvdHeaders(req.Header(), s.client.record)
-	resp, err := s.client.filesClient.ListDir(ctx, req)
-	if err != nil {
-		return nil, normalizeRPCError(err)
-	}
-	items := make([]FileInfo, 0, len(resp.Msg.Entries))
-	for _, entry := range resp.Msg.Entries {
-		if entry.GetType() != filesystempb.FileType_FILE_TYPE_FILE {
-			continue
-		}
-		items = append(items, FileInfo{
-			Path: entry.GetPath(),
-			Size: entry.GetSize(),
-		})
-	}
-	return items, nil
 }
 
 func (s *Sandbox) listFilesByFind(ctx context.Context, prefix string) ([]FileInfo, error) {
@@ -176,13 +162,6 @@ func (s *Sandbox) readFileByCat(ctx context.Context, path string) ([]byte, error
 // Exec runs a command in the sandbox, collecting stdout and stderr, and
 // returns once the process exits or the context is cancelled.
 func (s *Sandbox) Exec(ctx context.Context, request ExecRequest) (ExecResult, error) {
-	if err := s.ensureActive(); err != nil {
-		return ExecResult{}, err
-	}
-	if len(request.Command) == 0 {
-		return ExecResult{}, fmt.Errorf("e2b: ExecRequest.Command must be non-empty")
-	}
-
 	execCtx := ctx
 	cancel := func() {}
 	if request.Timeout > 0 {
@@ -190,55 +169,25 @@ func (s *Sandbox) Exec(ctx context.Context, request ExecRequest) (ExecResult, er
 	}
 	defer cancel()
 
-	stdin := false
-	req := connect.NewRequest(&processpb.StartRequest{
-		Process: &processpb.ProcessConfig{
-			Cmd:  request.Command[0],
-			Args: request.Command[1:],
-			Envs: request.Environment,
-			Cwd:  stringPtr(request.WorkingDirectory),
-		},
-		Stdin: &stdin,
+	handle, err := s.StartCommand(execCtx, CommandStartRequest{
+		Command:          request.Command,
+		WorkingDirectory: request.WorkingDirectory,
+		Environment:      request.Environment,
 	})
-	if authHeader := legacySandboxAuthHeader(s.client.record.EnvdVersion); authHeader != "" {
-		req.Header().Set("Authorization", authHeader)
-	}
-	req.Header().Set("Keepalive-Ping-Interval", "50")
-	s.client.api.setEnvdHeaders(req.Header(), s.client.record)
-
-	stream, err := s.client.processClient.Start(execCtx, req)
 	if err != nil {
-		return ExecResult{}, normalizeRPCError(err)
+		return ExecResult{}, err
 	}
-	defer stream.Close()
 
-	result := ExecResult{Metadata: map[string]string{}}
-	var stdout strings.Builder
-	var stderr strings.Builder
-	for stream.Receive() {
-		event := stream.Msg().GetEvent().GetEvent()
-		switch e := event.(type) {
-		case *processpb.ProcessEvent_Data:
-			data := e.Data.GetOutput()
-			switch out := data.(type) {
-			case *processpb.ProcessEvent_DataEvent_Stdout:
-				_, _ = stdout.Write(out.Stdout)
-			case *processpb.ProcessEvent_DataEvent_Stderr:
-				_, _ = stderr.Write(out.Stderr)
-			}
-		case *processpb.ProcessEvent_End:
-			result.ExitCode = int(e.End.GetExitCode())
-			if errorMessage := e.End.GetError(); errorMessage != "" {
-				result.Metadata["error"] = errorMessage
-			}
-		}
+	result, err := handle.Wait()
+	if err != nil {
+		return ExecResult{}, err
 	}
-	if err := stream.Err(); err != nil {
-		return ExecResult{}, normalizeRPCError(err)
-	}
-	result.Stdout = stdout.String()
-	result.Stderr = stderr.String()
-	return result, nil
+	return ExecResult{
+		ExitCode: result.ExitCode,
+		Stdout:   result.Stdout,
+		Stderr:   result.Stderr,
+		Metadata: cloneStringMap(result.Metadata),
+	}, nil
 }
 
 // Destroy terminates the sandbox. Safe to call more than once; only the
@@ -265,9 +214,10 @@ func (s *Sandbox) Destroy(ctx context.Context) error {
 			wait := make(chan struct{})
 			s.destroying = true
 			s.destroyWait = wait
+			transport := s.client
 			s.mu.Unlock()
 
-			err := s.client.api.destroySandbox(ctx, s.client.record.SandboxID)
+			err := transport.api.destroySandbox(ctx, transport.record.SandboxID)
 
 			s.mu.Lock()
 			s.destroying = false
@@ -293,6 +243,15 @@ func (s *Sandbox) ensureActive() error {
 		return ErrSandboxDestroyed
 	}
 	return nil
+}
+
+func (s *Sandbox) activeTransport() (sandboxTransport, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || s.destroying {
+		return sandboxTransport{}, ErrSandboxDestroyed
+	}
+	return s.client, nil
 }
 
 // installAdditionalPackages shells out to apt-get inside the sandbox.

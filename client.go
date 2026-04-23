@@ -171,40 +171,48 @@ func legacySandboxAuthHeader(envdVersion string) string {
 }
 
 func (c *apiClient) doJSON(ctx context.Context, method string, rawURL string, requestBody any, responseBody any, allowedEmptyStatuses map[int]struct{}, notFoundErr error) error {
+	_, _, err := c.doJSONWithResponse(ctx, method, rawURL, requestBody, responseBody, allowedEmptyStatuses, notFoundErr)
+	return err
+}
+
+func (c *apiClient) doJSONWithResponse(ctx context.Context, method string, rawURL string, requestBody any, responseBody any, allowedEmptyStatuses map[int]struct{}, notFoundErr error) (int, http.Header, error) {
 	var body io.Reader
 	if requestBody != nil {
 		payload, err := json.Marshal(requestBody)
 		if err != nil {
-			return err
+			return 0, nil, err
 		}
 		body = bytes.NewReader(payload)
 	}
 	req, err := http.NewRequestWithContext(ctx, method, rawURL, body)
 	if err != nil {
-		return err
+		return 0, nil, err
 	}
 	req.Header.Set("X-API-KEY", c.config.APIKey)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := c.controlHTTPClient.Do(req)
 	if err != nil {
-		return err
+		return 0, nil, err
 	}
 	defer resp.Body.Close()
 
 	respBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return err
+		return resp.StatusCode, resp.Header.Clone(), err
 	}
 	if _, ok := allowedEmptyStatuses[resp.StatusCode]; ok {
-		return nil
+		return resp.StatusCode, resp.Header.Clone(), nil
 	}
 	if resp.StatusCode >= 300 {
-		return normalizeHTTPError(resp.StatusCode, string(respBytes), notFoundErr)
+		return resp.StatusCode, resp.Header.Clone(), normalizeHTTPError(resp.StatusCode, string(respBytes), notFoundErr)
 	}
 	if responseBody == nil {
-		return nil
+		return resp.StatusCode, resp.Header.Clone(), nil
 	}
-	return json.Unmarshal(respBytes, responseBody)
+	if err := json.Unmarshal(respBytes, responseBody); err != nil {
+		return resp.StatusCode, resp.Header.Clone(), err
+	}
+	return resp.StatusCode, resp.Header.Clone(), nil
 }
 
 // createSandboxRequest is the wire format of POST /sandboxes. Kept

@@ -61,15 +61,7 @@ func (c *Client) CreateSandbox(ctx context.Context, request CreateRequest) (*San
 		return nil, err
 	}
 
-	sb := &Sandbox{
-		client: sandboxTransport{
-			api:           c.api,
-			record:        record,
-			processClient: c.api.processClient(record),
-			filesClient:   c.api.filesystemClient(record),
-		},
-		allowShellFallback: request.AllowShellFallback,
-	}
+	sb := c.newSandbox(record, request.AllowShellFallback)
 
 	if len(request.AdditionalPackages) > 0 {
 		if err := sb.installAdditionalPackages(ctx, request.AdditionalPackages); err != nil {
@@ -78,6 +70,18 @@ func (c *Client) CreateSandbox(ctx context.Context, request CreateRequest) (*San
 	}
 
 	return sb, nil
+}
+
+func (c *Client) newSandbox(record sandboxRecord, allowShellFallback bool) *Sandbox {
+	return &Sandbox{
+		client: sandboxTransport{
+			api:           c.api,
+			record:        record,
+			processClient: c.api.processClient(record),
+			filesClient:   c.api.filesystemClient(record),
+		},
+		allowShellFallback: allowShellFallback,
+	}
 }
 
 // EnvdURL returns the envd base URL for a given sandbox ID. Useful for

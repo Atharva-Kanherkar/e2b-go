@@ -22,6 +22,10 @@ var (
 	// ErrSandboxDestroyed is returned by any operation on a Sandbox whose
 	// Destroy has already been called.
 	ErrSandboxDestroyed = errors.New("e2b: sandbox is destroyed")
+
+	// ErrVolumeNotFound indicates the volume ID is unknown to the control
+	// plane.
+	ErrVolumeNotFound = errors.New("e2b: volume not found")
 )
 
 func normalizeHTTPError(statusCode int, body string, notFoundErr error) error {
@@ -49,4 +53,12 @@ func normalizeRPCError(err error) error {
 	default:
 		return fmt.Errorf("e2b: rpc failed: %w", err)
 	}
+}
+
+func normalizeProcessRPCError(err error) error {
+	var connectErr *connect.Error
+	if !errors.As(err, &connectErr) {
+		return err
+	}
+	return fmt.Errorf("e2b: process rpc failed: %w", err)
 }
