@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
-	filesystempb "github.com/e2b-dev/infra/packages/shared/pkg/grpc/envd/filesystem"
 	processpb "github.com/e2b-dev/infra/packages/shared/pkg/grpc/envd/process"
 )
 
@@ -99,32 +98,6 @@ func (s *Sandbox) ListFiles(ctx context.Context, prefix string) ([]FileInfo, err
 		return nil, errors.Join(err, fmt.Errorf("fallback list: %w", ferr))
 	}
 	return fallback, nil
-}
-
-func (s *Sandbox) listFilesRPC(ctx context.Context, transport sandboxTransport, prefix string) ([]FileInfo, error) {
-	req := connect.NewRequest(&filesystempb.ListDirRequest{
-		Path:  prefix,
-		Depth: 32,
-	})
-	if authHeader := legacySandboxAuthHeader(transport.record.EnvdVersion); authHeader != "" {
-		req.Header().Set("Authorization", authHeader)
-	}
-	transport.api.setEnvdHeaders(req.Header(), transport.record)
-	resp, err := transport.filesClient.ListDir(ctx, req)
-	if err != nil {
-		return nil, normalizeRPCError(err)
-	}
-	items := make([]FileInfo, 0, len(resp.Msg.Entries))
-	for _, entry := range resp.Msg.Entries {
-		if entry.GetType() != filesystempb.FileType_FILE_TYPE_FILE {
-			continue
-		}
-		items = append(items, FileInfo{
-			Path: entry.GetPath(),
-			Size: entry.GetSize(),
-		})
-	}
-	return items, nil
 }
 
 func (s *Sandbox) listFilesByFind(ctx context.Context, prefix string) ([]FileInfo, error) {
