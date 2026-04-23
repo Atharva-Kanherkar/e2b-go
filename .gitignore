@@ -11,6 +11,7 @@ dist/
 *.test
 *.out
 coverage.*
+testing/
 
 # Go workspace / env
 go.work

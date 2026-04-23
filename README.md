@@ -1,191 +1,203 @@
 # e2b-go
 
-An unofficial Go SDK for [E2B](https://e2b.dev) sandboxes.
+[![Go Reference](https://pkg.go.dev/badge/github.com/Atharva-Kanherkar/e2b-go.svg)](https://pkg.go.dev/github.com/Atharva-Kanherkar/e2b-go)
+[![Go Report Card](https://goreportcard.com/badge/github.com/Atharva-Kanherkar/e2b-go)](https://goreportcard.com/report/github.com/Atharva-Kanherkar/e2b-go)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 
-E2B ships official SDKs for JavaScript and Python but has no first-class Go
-client. Issue [e2b-dev/E2B#985](https://github.com/e2b-dev/E2B/issues/985) has
-been open since October 2025 with no upstream movement. This repo fills that
-gap with a battle-tested client extracted from a production Go codebase
-([AgentClash](https://github.com/agentclash/agentclash)).
+An unofficial Go SDK for [E2B](https://e2b.dev).
 
-> **Status:** parity-focused beta — unit tests pass, `go test -race ./...`
-> passes, and the core sandbox + volume runtime surface is implemented. Live
-> integration tests against a real E2B environment are still missing.
+`e2b-go` gives Go applications access to the same core runtime workflows that
+exist in the JavaScript and Python SDKs: sandbox lifecycle management,
+filesystem operations, command execution, PTY sessions, snapshots, metrics, and
+persistent volumes.
 
-## Install
+## Why This Exists
+
+E2B ships official SDKs for JavaScript and Python, but there is no first-class
+Go SDK today. This project fills that gap with a Go-native client aimed at
+practical parity for backend and agent workloads.
+
+This project is unofficial and is not affiliated with or endorsed by E2B. If an
+official Go SDK lands upstream, this repo should ideally become unnecessary.
+
+## Status
+
+This project is in **beta**.
+
+- The core sandbox, process, PTY, and volume runtime surface is implemented.
+- `go test ./...` passes.
+- `go test -race ./...` passes.
+- Live integration coverage against a real E2B environment is still missing.
+
+That means the SDK is in good shape for early adopters, but it should still be
+treated as a fast-moving package rather than a fully hardened, long-term-stable
+API.
+
+## Requirements
+
+- Go `1.25+`
+- An E2B API key
+
+## Installation
 
 ```bash
-go get github.com/Atharva-Kanherkar/e2b-go
+go get github.com/Atharva-Kanherkar/e2b-go@latest
 ```
 
-## Quick start
+## Quick Start
 
 ```go
 package main
 
 import (
-    "context"
-    "fmt"
-    "time"
+	"context"
+	"fmt"
+	"time"
 
-    "github.com/Atharva-Kanherkar/e2b-go"
+	"github.com/Atharva-Kanherkar/e2b-go"
 )
 
 func main() {
-    ctx := context.Background()
-    c := e2b.NewClient("E2B_API_KEY")
+	ctx := context.Background()
+	client := e2b.NewClient("E2B_API_KEY")
 
-    sb, err := c.CreateSandbox(ctx, e2b.CreateRequest{
-        TemplateID: "base",
-        Timeout:    5 * time.Minute,
-    })
-    if err != nil { panic(err) }
-    defer sb.Destroy(ctx)
+	sb, err := client.CreateSandbox(ctx, e2b.CreateRequest{
+		TemplateID: "base",
+		Timeout:    5 * time.Minute,
+	})
+	if err != nil {
+		panic(err)
+	}
+	defer sb.Destroy(ctx)
 
-    if err := sb.WriteFile(ctx, "/workspace/hello.txt", []byte("hi")); err != nil {
-        panic(err)
-    }
+	if err := sb.WriteFile(ctx, "/workspace/hello.txt", []byte("hi")); err != nil {
+		panic(err)
+	}
 
-    out, err := sb.Exec(ctx, e2b.ExecRequest{
-        Command: []string{"cat", "/workspace/hello.txt"},
-    })
-    if err != nil { panic(err) }
-    fmt.Println(out.Stdout) // "hi"
+	result, err := sb.Exec(ctx, e2b.ExecRequest{
+		Command: []string{"cat", "/workspace/hello.txt"},
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	fmt.Println(result.Stdout) // hi
 }
 ```
 
-## Surface
+## Feature Coverage
 
-```go
-// Control plane / lifecycle
-e2b.NewClient(apiKey string) *Client
-e2b.NewClientWithConfig(Config) *Client
-(*Client).CreateSandbox(ctx, CreateRequest) (*Sandbox, error)
-(*Client).ListSandboxes(ctx, ListSandboxesRequest) (ListSandboxesResponse, error)
-(*Client).GetSandboxInfo(ctx, sandboxID) (SandboxInfo, error)
-(*Client).ConnectSandbox(ctx, ConnectSandboxRequest) (*Sandbox, error)
-(*Client).ListSnapshots(ctx, ListSnapshotsRequest) (ListSnapshotsResponse, error)
-(*Client).DeleteSnapshot(ctx, snapshotID) (bool, error)
-(*Client).CreateVolume(ctx, name) (*Volume, error)
-(*Client).ConnectVolume(ctx, volumeID) (*Volume, error)
-(*Client).GetVolumeInfo(ctx, volumeID) (VolumeAndToken, error)
-(*Client).ListVolumes(ctx) ([]VolumeInfo, error)
-(*Client).DestroyVolume(ctx, volumeID) (bool, error)
+### Sandbox lifecycle
 
-// Sandbox lifecycle / metadata
-(*Sandbox).ID() string
-(*Sandbox).TemplateID() string
-(*Sandbox).EnvdURL() string
-(*Sandbox).GetHost(port int) string
-(*Sandbox).Connect(ctx, timeout) error
-(*Sandbox).GetInfo(ctx) (SandboxInfo, error)
-(*Sandbox).Pause(ctx) (bool, error)
-(*Sandbox).SetTimeout(ctx, timeout) error
-(*Sandbox).GetMetrics(ctx, SandboxMetricsRequest) ([]SandboxMetric, error)
-(*Sandbox).CreateSnapshot(ctx, CreateSnapshotRequest) (SnapshotInfo, error)
-(*Sandbox).ListSnapshots(ctx, ListSnapshotsRequest) (ListSnapshotsResponse, error)
-(*Sandbox).Kill(ctx) error
+- Create and destroy sandboxes
+- Connect to existing sandboxes
+- Fetch sandbox info and metrics
+- Pause sandboxes
+- Update sandbox timeouts
+- Create and list snapshots
 
-// Sandbox filesystem
-(*Sandbox).ReadFile(ctx, path) ([]byte, error)
-(*Sandbox).WriteFile(ctx, path, content) error
-(*Sandbox).ListFiles(ctx, prefix) ([]FileInfo, error)
-(*Sandbox).ListDir(ctx, path, depth) ([]EntryInfo, error)
-(*Sandbox).Stat(ctx, path) (EntryInfo, error)
-(*Sandbox).Exists(ctx, path) (bool, error)
-(*Sandbox).MakeDir(ctx, path) (bool, error)
-(*Sandbox).Rename(ctx, oldPath, newPath) (EntryInfo, error)
-(*Sandbox).Remove(ctx, path) error
-(*Sandbox).WatchDir(ctx, path, WatchOptions, onEvent) (*WatchHandle, error)
+### Filesystem
 
-// Commands / PTY
-(*Sandbox).Exec(ctx, ExecRequest) (ExecResult, error)
-(*Sandbox).ListProcesses(ctx) ([]ProcessInfo, error)
-(*Sandbox).StartCommand(ctx, CommandStartRequest) (*CommandHandle, error)
-(*Sandbox).ConnectProcess(ctx, pid, CommandConnectOptions) (*CommandHandle, error)
-(*Sandbox).CreatePTY(ctx, PTYStartRequest) (*CommandHandle, error)
-(*Sandbox).ConnectPTY(ctx, pid, PTYConnectOptions) (*CommandHandle, error)
-(*Sandbox).Destroy(ctx) error
+- Read and write files
+- List files or full directory entries
+- Stat and existence checks
+- Create directories
+- Rename and remove paths
+- Watch directories for filesystem events
+- Optional shell fallback for older or inconsistent envd behavior
 
-// Volumes
-(*Volume).ID() string
-(*Volume).Name() string
-(*Volume).Destroy(ctx) (bool, error)
-(*Volume).List(ctx, path, depth) ([]VolumeEntryInfo, error)
-(*Volume).MakeDir(ctx, path, VolumeWriteOptions) (VolumeEntryInfo, error)
-(*Volume).Stat(ctx, path) (VolumeEntryInfo, error)
-(*Volume).Exists(ctx, path) (bool, error)
-(*Volume).UpdateMetadata(ctx, path, VolumeMetadataOptions) (VolumeEntryInfo, error)
-(*Volume).ReadFile(ctx, path) ([]byte, error)
-(*Volume).WriteFile(ctx, path, content, VolumeWriteOptions) (VolumeEntryInfo, error)
-(*Volume).Remove(ctx, path) error
-```
+### Commands and PTY
 
-### Error sentinels
+- Run foreground commands with collected stdout and stderr
+- Start background commands and reconnect to running processes
+- Send stdin, close stdin, and kill running processes
+- Create PTY sessions, send PTY input, resize terminals, and reconnect
 
-Branch on these with `errors.Is`:
+### Volumes
 
-- `e2b.ErrSandboxNotFound` — control plane doesn't know the sandbox ID
-  (usually it's been destroyed or timed out).
-- `e2b.ErrFileNotFound` — file operation hit a missing path.
-- `e2b.ErrSandboxDestroyed` — you called a method on a Sandbox whose
-  `Destroy` has already run.
-- `e2b.ErrVolumeNotFound` — control plane doesn't know the volume ID.
+- Create, connect, list, inspect, and destroy persistent volumes
+- Read, write, stat, list, mkdir, update metadata, and remove volume paths
 
-## What's in `CreateRequest`
+## Package Overview
 
-| Field                 | Purpose                                                                          |
-|-----------------------|----------------------------------------------------------------------------------|
-| `TemplateID`          | Which E2B template the sandbox is cloned from. **Required.**                     |
-| `Timeout`             | Lifetime cap. Zero = server default.                                             |
-| `Metadata`            | Attached to the sandbox; visible on the control plane.                           |
-| `EnvVars`             | Injected into every process in the sandbox.                                      |
-| `AllowInternetAccess` | Enable general internet egress. Defaults to `false` (network-isolated).          |
-| `NetworkAllowlist`    | Egress allowlist when `AllowInternetAccess=false`.                               |
-| `AdditionalPackages`  | Installed via `apt-get` at startup.                                              |
-| `AllowShellFallback`  | Use `cat`/`find` fallbacks when envd RPC fails (e.g. on older envd versions).    |
+For full API documentation, see the package docs on
+[pkg.go.dev](https://pkg.go.dev/github.com/Atharva-Kanherkar/e2b-go).
+
+The public surface is organized around three main handles:
+
+- `Client` for control-plane operations such as sandbox and volume lifecycle
+- `Sandbox` for envd-backed filesystem, command, PTY, and runtime methods
+- `Volume` for persistent volume content operations
+
+## Error Handling
+
+The package exposes sentinel errors intended for `errors.Is` checks:
+
+- `e2b.ErrSandboxNotFound`
+- `e2b.ErrFileNotFound`
+- `e2b.ErrSandboxDestroyed`
+- `e2b.ErrVolumeNotFound`
+
+## CreateRequest
+
+`CreateRequest` controls sandbox provisioning:
+
+| Field | Purpose |
+| --- | --- |
+| `TemplateID` | Template to clone from. Required. |
+| `Timeout` | Sandbox lifetime cap. Zero uses the server default. |
+| `Metadata` | Metadata attached to the sandbox on create. |
+| `EnvVars` | Environment variables injected into sandbox processes. |
+| `AllowInternetAccess` | Enables unrestricted internet egress when `true`. |
+| `NetworkAllowlist` | Egress allowlist used when internet access is otherwise disabled. |
+| `AdditionalPackages` | Debian packages installed with `apt-get` before `CreateSandbox` returns. |
+| `AllowShellFallback` | Enables shell-based fallbacks for selected filesystem operations. |
 
 ## Architecture
 
-Three transports:
+The SDK uses three underlying transports:
 
-- **Control plane** — REST calls to `api.e2b.app/sandboxes` for create /
-  destroy, plus sandbox metadata, snapshots, and team volumes.
-- **Envd** — [ConnectRPC](https://connectrpc.com) to the envd agent running
-  inside each sandbox, for filesystem + process operations. Uses generated
-  stubs from `github.com/e2b-dev/infra/packages/shared`.
-- **Volume content API** — REST calls to `api.e2b.app/volumecontent/...`
-  authenticated with the per-volume bearer token returned by the control plane.
+- **Control plane REST API** for sandbox lifecycle, metadata, snapshots, and team volumes
+- **Envd ConnectRPC** for sandbox filesystem, command, and PTY operations
+- **Volume content REST API** for persistent volume file operations using a bearer token
 
-When envd responses don't come through (older envd, RPC blipped,
-filesystem call returning `NOT_FOUND` misleadingly), `AllowShellFallback`
-retries via `sh -c` exec for `ReadFile` / `ListFiles`. Default off.
+## Testing
 
-## Status
+The current test suite is unit-test heavy and focuses on:
 
-- ✅ Sandbox create / destroy / connect / info / pause / timeout / metrics / snapshots
-- ✅ File read / write / list / stat / exists / mkdir / rename / remove / watch
-- ✅ Background commands, process reconnect/list/stdin/kill, and PTY sessions
-- ✅ Persistent volume create / connect / list / destroy and content operations
-- ✅ `apt-get` additional-packages install at create time
-- ✅ Unit tests for control-plane wire format, ConnectRPC streams, and error normalization
-- ✅ `go test -race ./...`
-- ⏳ Integration tests against a real E2B
-- ⏳ Signed upload / download URL helpers
-- ⏳ Git convenience wrappers from the JS / Python SDKs
+- control-plane request and response normalization
+- envd ConnectRPC request shapes and stream handling
+- concurrency-sensitive command and watch flows
+- bearer-auth volume content operations
 
-## Relationship to E2B upstream
+Run the checks locally with:
 
-Unofficial. Not affiliated with or endorsed by E2B. If the E2B team wants
-to absorb this into `e2b-dev/E2B/packages/go-sdk`, that would be the
-ideal outcome; until then, this lives here.
+```bash
+go test ./...
+go test -race ./...
+```
+
+## Roadmap
+
+The highest-value remaining gaps are:
+
+- live integration tests against a real E2B environment
+- signed upload and download URL helpers
+- higher-level Git convenience APIs that exist in other SDKs
 
 ## Contributing
 
-Issues and PRs welcome. Ping
-[@Atharva-Kanherkar](https://github.com/Atharva-Kanherkar) to coordinate on
-surface expansions.
+Issues and pull requests are welcome.
+
+If you want to extend surface area or align behavior with upstream SDKs, opening
+an issue first is helpful so the API shape can stay coherent.
+
+## Relationship To Upstream
+
+This repository exists because there is no official Go SDK at the time of
+writing. If the E2B team decides to ship or adopt one upstream, aligning this
+project with that effort would be the best long-term outcome.
 
 ## License
 
-MIT — see [LICENSE](./LICENSE).
+MIT. See [LICENSE](./LICENSE).
