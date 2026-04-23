@@ -80,9 +80,7 @@ func (c *apiClient) processClient(record sandboxRecord) processconnect.ProcessCl
 }
 
 func (c *apiClient) readFile(ctx context.Context, record sandboxRecord, filePath string) ([]byte, error) {
-	values := url.Values{}
-	values.Set("path", filePath)
-	values.Set("username", defaultSandboxUser)
+	values := c.envdFileQuery(record, filePath)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.envdBaseURL(record)+"/files?"+values.Encode(), nil)
 	if err != nil {
 		return nil, err
@@ -118,9 +116,7 @@ func (c *apiClient) writeFile(ctx context.Context, record sandboxRecord, filePat
 		return err
 	}
 
-	values := url.Values{}
-	values.Set("path", filePath)
-	values.Set("username", defaultSandboxUser)
+	values := c.envdFileQuery(record, filePath)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.envdBaseURL(record)+"/files?"+values.Encode(), &body)
 	if err != nil {
 		return err
@@ -150,8 +146,28 @@ func (c *apiClient) setEnvdHeaders(header http.Header, record sandboxRecord) {
 	header.Set("E2b-Sandbox-Port", strconv.Itoa(defaultEnvdPort))
 }
 
-func (c *apiClient) authHeader() string {
-	return "Basic " + base64.StdEncoding.EncodeToString([]byte(defaultSandboxUser+":"))
+func (c *apiClient) envdFileQuery(record sandboxRecord, filePath string) url.Values {
+	values := url.Values{}
+	values.Set("path", filePath)
+	if username := legacySandboxUsername(record.EnvdVersion); username != "" {
+		values.Set("username", username)
+	}
+	return values
+}
+
+func legacySandboxUsername(envdVersion string) string {
+	if usesLegacySandboxUser(envdVersion) {
+		return defaultLegacySandboxUser
+	}
+	return ""
+}
+
+func legacySandboxAuthHeader(envdVersion string) string {
+	username := legacySandboxUsername(envdVersion)
+	if username == "" {
+		return ""
+	}
+	return "Basic " + base64.StdEncoding.EncodeToString([]byte(username+":"))
 }
 
 func (c *apiClient) doJSON(ctx context.Context, method string, rawURL string, requestBody any, responseBody any, allowedEmptyStatuses map[int]struct{}, notFoundErr error) error {

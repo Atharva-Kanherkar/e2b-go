@@ -88,7 +88,9 @@ func (s *Sandbox) listFilesRPC(ctx context.Context, prefix string) ([]FileInfo, 
 		Path:  prefix,
 		Depth: 32,
 	})
-	req.Header().Set("Authorization", s.client.api.authHeader())
+	if authHeader := legacySandboxAuthHeader(s.client.record.EnvdVersion); authHeader != "" {
+		req.Header().Set("Authorization", authHeader)
+	}
 	s.client.api.setEnvdHeaders(req.Header(), s.client.record)
 	resp, err := s.client.filesClient.ListDir(ctx, req)
 	if err != nil {
@@ -196,7 +198,9 @@ func (s *Sandbox) Exec(ctx context.Context, request ExecRequest) (ExecResult, er
 		},
 		Stdin: &stdin,
 	})
-	req.Header().Set("Authorization", s.client.api.authHeader())
+	if authHeader := legacySandboxAuthHeader(s.client.record.EnvdVersion); authHeader != "" {
+		req.Header().Set("Authorization", authHeader)
+	}
 	req.Header().Set("Keepalive-Ping-Interval", "50")
 	s.client.api.setEnvdHeaders(req.Header(), s.client.record)
 

@@ -177,3 +177,44 @@ func TestNewAPIClientSeparatesControlAndEnvdTimeouts(t *testing.T) {
 		t.Fatalf("envdHTTPClient.Timeout = %v, want 0", got)
 	}
 }
+
+func TestLegacySandboxUsernameForFileHTTP(t *testing.T) {
+	client := newAPIClient(Config{})
+
+	tests := []struct {
+		name           string
+		envdVersion    string
+		wantLegacyUser bool
+		wantUsername   string
+	}{
+		{name: "legacy envd", envdVersion: "0.3.9", wantLegacyUser: true, wantUsername: "user"},
+		{name: "modern envd", envdVersion: "0.4.0", wantLegacyUser: false, wantUsername: ""},
+		{name: "modern envd with v prefix", envdVersion: "v0.5.1", wantLegacyUser: false, wantUsername: ""},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			record := sandboxRecord{EnvdVersion: test.envdVersion}
+			values := client.envdFileQuery(record, "/workspace/example.txt")
+
+			if got := usesLegacySandboxUser(test.envdVersion); got != test.wantLegacyUser {
+				t.Fatalf("usesLegacySandboxUser(%q) = %v, want %v", test.envdVersion, got, test.wantLegacyUser)
+			}
+			if got := values.Get("path"); got != "/workspace/example.txt" {
+				t.Fatalf("path query = %q, want /workspace/example.txt", got)
+			}
+			if got := values.Get("username"); got != test.wantUsername {
+				t.Fatalf("username query = %q, want %q", got, test.wantUsername)
+			}
+		})
+	}
+}
+
+func TestLegacySandboxAuthHeader(t *testing.T) {
+	if got, want := legacySandboxAuthHeader("0.3.9"), "Basic dXNlcjo="; got != want {
+		t.Fatalf("legacySandboxAuthHeader(legacy) = %q, want %q", got, want)
+	}
+	if got := legacySandboxAuthHeader("0.4.0"); got != "" {
+		t.Fatalf("legacySandboxAuthHeader(modern) = %q, want empty string", got)
+	}
+}
