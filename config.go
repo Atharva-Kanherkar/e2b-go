@@ -39,3 +39,10 @@ func (c Config) requestTimeout() time.Duration {
 	}
 	return c.RequestTimeout
 }
+
+func durationToWholeSeconds(value time.Duration) int {
+	if value <= 0 {
+		return 0
+	}
+	return int((value + time.Second - 1) / time.Second)
+}

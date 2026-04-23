@@ -4,9 +4,10 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 )
 
-func TestCreateSandboxRequestUsesCamelCaseInternetField(t *testing.T) {
+func TestCreateSandboxRequestUsesSnakeCaseInternetField(t *testing.T) {
 	payload, err := json.Marshal(createSandboxRequest{
 		TemplateID:          "template",
 		Timeout:             300,
@@ -22,11 +23,11 @@ func TestCreateSandboxRequestUsesCamelCaseInternetField(t *testing.T) {
 		t.Fatalf("Unmarshal returned error: %v", err)
 	}
 
-	if _, ok := decoded["allowInternetAccess"]; !ok {
-		t.Fatalf("payload missing allowInternetAccess field: %s", string(payload))
+	if _, ok := decoded["allow_internet_access"]; !ok {
+		t.Fatalf("payload missing allow_internet_access field: %s", string(payload))
 	}
-	if _, ok := decoded["allow_internet_access"]; ok {
-		t.Fatalf("payload unexpectedly contains allow_internet_access field: %s", string(payload))
+	if _, ok := decoded["allowInternetAccess"]; ok {
+		t.Fatalf("payload unexpectedly contains allowInternetAccess field: %s", string(payload))
 	}
 }
 
@@ -142,5 +143,37 @@ func TestConfigTrimsAPIBaseURL(t *testing.T) {
 	c := Config{APIBaseURL: "  https://staging.e2b.app/  "}
 	if got, want := c.apiBaseURL(), "https://staging.e2b.app"; got != want {
 		t.Errorf("apiBaseURL() = %q, want %q", got, want)
+	}
+}
+
+func TestDurationToWholeSecondsRoundsUp(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    time.Duration
+		expected int
+	}{
+		{name: "zero", input: 0, expected: 0},
+		{name: "sub-second", input: 250 * time.Millisecond, expected: 1},
+		{name: "exact second", input: time.Second, expected: 1},
+		{name: "fractional second", input: time.Second + 250*time.Millisecond, expected: 2},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := durationToWholeSeconds(test.input); got != test.expected {
+				t.Fatalf("durationToWholeSeconds(%v) = %d, want %d", test.input, got, test.expected)
+			}
+		})
+	}
+}
+
+func TestNewAPIClientSeparatesControlAndEnvdTimeouts(t *testing.T) {
+	client := newAPIClient(Config{RequestTimeout: 42 * time.Second})
+
+	if got, want := client.controlHTTPClient.Timeout, 42*time.Second; got != want {
+		t.Fatalf("controlHTTPClient.Timeout = %v, want %v", got, want)
+	}
+	if got := client.envdHTTPClient.Timeout; got != 0 {
+		t.Fatalf("envdHTTPClient.Timeout = %v, want 0", got)
 	}
 }

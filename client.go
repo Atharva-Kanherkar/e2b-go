@@ -21,8 +21,9 @@ import (
 // apiClient speaks to the E2B control-plane REST API and builds
 // envd-scoped ConnectRPC clients for individual sandboxes.
 type apiClient struct {
-	httpClient *http.Client
-	config     Config
+	controlHTTPClient *http.Client
+	envdHTTPClient    *http.Client
+	config            Config
 }
 
 type sandboxRecord struct {
@@ -36,8 +37,9 @@ type sandboxRecord struct {
 
 func newAPIClient(config Config) *apiClient {
 	return &apiClient{
-		httpClient: &http.Client{Timeout: config.requestTimeout()},
-		config:     config,
+		controlHTTPClient: &http.Client{Timeout: config.requestTimeout()},
+		envdHTTPClient:    &http.Client{},
+		config:            config,
 	}
 }
 
@@ -70,11 +72,11 @@ func (c *apiClient) envdBaseURL(record sandboxRecord) string {
 }
 
 func (c *apiClient) filesystemClient(record sandboxRecord) filesystemconnect.FilesystemClient {
-	return filesystemconnect.NewFilesystemClient(c.httpClient, c.envdBaseURL(record))
+	return filesystemconnect.NewFilesystemClient(c.envdHTTPClient, c.envdBaseURL(record))
 }
 
 func (c *apiClient) processClient(record sandboxRecord) processconnect.ProcessClient {
-	return processconnect.NewProcessClient(c.httpClient, c.envdBaseURL(record))
+	return processconnect.NewProcessClient(c.envdHTTPClient, c.envdBaseURL(record))
 }
 
 func (c *apiClient) readFile(ctx context.Context, record sandboxRecord, filePath string) ([]byte, error) {
@@ -86,7 +88,7 @@ func (c *apiClient) readFile(ctx context.Context, record sandboxRecord, filePath
 		return nil, err
 	}
 	c.setEnvdHeaders(req.Header, record)
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.envdHTTPClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -126,7 +128,7 @@ func (c *apiClient) writeFile(ctx context.Context, record sandboxRecord, filePat
 	c.setEnvdHeaders(req.Header, record)
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.envdHTTPClient.Do(req)
 	if err != nil {
 		return err
 	}
@@ -167,7 +169,7 @@ func (c *apiClient) doJSON(ctx context.Context, method string, rawURL string, re
 	}
 	req.Header.Set("X-API-KEY", c.config.APIKey)
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.controlHTTPClient.Do(req)
 	if err != nil {
 		return err
 	}
@@ -196,7 +198,7 @@ type createSandboxRequest struct {
 	Timeout             int               `json:"timeout"`
 	Metadata            map[string]string `json:"metadata,omitempty"`
 	Secure              bool              `json:"secure"`
-	AllowInternetAccess bool               `json:"allowInternetAccess"`
+	AllowInternetAccess bool              `json:"allow_internet_access"`
 	EnvVars             map[string]string `json:"envVars,omitempty"`
 	Network             *networkConfig    `json:"network,omitempty"`
 }

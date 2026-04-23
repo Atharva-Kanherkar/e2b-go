@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/e2b-dev/infra/packages/shared/pkg/grpc/envd/filesystem/filesystemconnect"
 	"github.com/e2b-dev/infra/packages/shared/pkg/grpc/envd/process/processconnect"
@@ -50,7 +49,7 @@ func (c *Client) CreateSandbox(ctx context.Context, request CreateRequest) (*San
 
 	record, err := c.api.createSandbox(ctx, createSandboxRequest{
 		TemplateID:          request.TemplateID,
-		Timeout:             int(request.Timeout.Round(time.Second) / time.Second),
+		Timeout:             durationToWholeSeconds(request.Timeout),
 		Metadata:            request.Metadata,
 		Secure:              true,
 		AllowInternetAccess: request.AllowInternetAccess,
