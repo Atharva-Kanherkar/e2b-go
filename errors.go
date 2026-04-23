@@ -50,3 +50,11 @@ func normalizeRPCError(err error) error {
 		return fmt.Errorf("e2b: rpc failed: %w", err)
 	}
 }
+
+func normalizeProcessRPCError(err error) error {
+	var connectErr *connect.Error
+	if !errors.As(err, &connectErr) {
+		return err
+	}
+	return fmt.Errorf("e2b: process rpc failed: %w", err)
+}

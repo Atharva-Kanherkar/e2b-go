@@ -8,9 +8,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"connectrpc.com/connect"
-	processpb "github.com/e2b-dev/infra/packages/shared/pkg/grpc/envd/process"
 )
 
 // Sandbox is a handle to a live E2B microVM. Methods are safe for
@@ -165,14 +162,6 @@ func (s *Sandbox) readFileByCat(ctx context.Context, path string) ([]byte, error
 // Exec runs a command in the sandbox, collecting stdout and stderr, and
 // returns once the process exits or the context is cancelled.
 func (s *Sandbox) Exec(ctx context.Context, request ExecRequest) (ExecResult, error) {
-	transport, err := s.activeTransport()
-	if err != nil {
-		return ExecResult{}, err
-	}
-	if len(request.Command) == 0 {
-		return ExecResult{}, fmt.Errorf("e2b: ExecRequest.Command must be non-empty")
-	}
-
 	execCtx := ctx
 	cancel := func() {}
 	if request.Timeout > 0 {
@@ -180,55 +169,25 @@ func (s *Sandbox) Exec(ctx context.Context, request ExecRequest) (ExecResult, er
 	}
 	defer cancel()
 
-	stdin := false
-	req := connect.NewRequest(&processpb.StartRequest{
-		Process: &processpb.ProcessConfig{
-			Cmd:  request.Command[0],
-			Args: request.Command[1:],
-			Envs: request.Environment,
-			Cwd:  stringPtr(request.WorkingDirectory),
-		},
-		Stdin: &stdin,
+	handle, err := s.StartCommand(execCtx, CommandStartRequest{
+		Command:          request.Command,
+		WorkingDirectory: request.WorkingDirectory,
+		Environment:      request.Environment,
 	})
-	if authHeader := legacySandboxAuthHeader(s.client.record.EnvdVersion); authHeader != "" {
-		req.Header().Set("Authorization", authHeader)
-	}
-	req.Header().Set("Keepalive-Ping-Interval", "50")
-	s.client.api.setEnvdHeaders(req.Header(), s.client.record)
-
-	stream, err := transport.processClient.Start(execCtx, req)
 	if err != nil {
-		return ExecResult{}, normalizeRPCError(err)
+		return ExecResult{}, err
 	}
-	defer stream.Close()
 
-	result := ExecResult{Metadata: map[string]string{}}
-	var stdout strings.Builder
-	var stderr strings.Builder
-	for stream.Receive() {
-		event := stream.Msg().GetEvent().GetEvent()
-		switch e := event.(type) {
-		case *processpb.ProcessEvent_Data:
-			data := e.Data.GetOutput()
-			switch out := data.(type) {
-			case *processpb.ProcessEvent_DataEvent_Stdout:
-				_, _ = stdout.Write(out.Stdout)
-			case *processpb.ProcessEvent_DataEvent_Stderr:
-				_, _ = stderr.Write(out.Stderr)
-			}
-		case *processpb.ProcessEvent_End:
-			result.ExitCode = int(e.End.GetExitCode())
-			if errorMessage := e.End.GetError(); errorMessage != "" {
-				result.Metadata["error"] = errorMessage
-			}
-		}
+	result, err := handle.Wait()
+	if err != nil {
+		return ExecResult{}, err
 	}
-	if err := stream.Err(); err != nil {
-		return ExecResult{}, normalizeRPCError(err)
-	}
-	result.Stdout = stdout.String()
-	result.Stderr = stderr.String()
-	return result, nil
+	return ExecResult{
+		ExitCode: result.ExitCode,
+		Stdout:   result.Stdout,
+		Stderr:   result.Stderr,
+		Metadata: cloneStringMap(result.Metadata),
+	}, nil
 }
 
 // Destroy terminates the sandbox. Safe to call more than once; only the
