@@ -138,6 +138,38 @@ The package exposes sentinel errors intended for `errors.Is` checks:
 - `e2b.ErrSandboxDestroyed`
 - `e2b.ErrVolumeNotFound`
 
+## Retries
+
+By default, the SDK retries transient HTTP failures conservatively: up to three
+total attempts with short exponential backoff. Retryable responses include HTTP
+408, 409, 425, 429, and 5xx statuses, plus temporary network errors. When a
+server sends `Retry-After`, the SDK honors both seconds and HTTP-date formats.
+
+Retries are applied to idempotent requests and SDK operations that are safe to
+repeat, including direct envd file reads and writes. Obviously unsafe create
+operations are not retried automatically.
+
+```go
+client := e2b.NewClientWithConfig(e2b.Config{
+	APIKey: "E2B_API_KEY",
+	RetryPolicy: &e2b.RetryPolicy{
+		MaxAttempts:  4,
+		InitialDelay: 100 * time.Millisecond,
+		MaxDelay:     time.Second,
+		Multiplier:   2,
+	},
+})
+```
+
+Disable retries when the caller wants single-shot behavior:
+
+```go
+client := e2b.NewClientWithConfig(e2b.Config{
+	APIKey:       "E2B_API_KEY",
+	RetryPolicy: e2b.NoRetries(),
+})
+```
+
 ## CreateRequest
 
 `CreateRequest` controls sandbox provisioning:

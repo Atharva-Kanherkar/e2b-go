@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-func TestDestroyFailedRequestIsRetryable(t *testing.T) {
+func TestDestroyRetriesTransientFailure(t *testing.T) {
 	deleteCalls := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodDelete {
@@ -41,14 +41,8 @@ func TestDestroyFailedRequestIsRetryable(t *testing.T) {
 		},
 	}
 
-	if err := sb.Destroy(context.Background()); err == nil {
-		t.Fatal("Destroy() error = nil, want transient failure")
-	}
-	if err := sb.ensureActive(); err != nil {
-		t.Fatalf("ensureActive() after failed destroy = %v, want nil", err)
-	}
 	if err := sb.Destroy(context.Background()); err != nil {
-		t.Fatalf("Destroy() retry error = %v, want nil", err)
+		t.Fatalf("Destroy() error = %v, want nil", err)
 	}
 	if err := sb.Destroy(context.Background()); err != nil {
 		t.Fatalf("Destroy() after success error = %v, want nil", err)
