@@ -9,6 +9,10 @@ import (
 const (
 	defaultAPIBaseURL        = "https://api.e2b.app"
 	defaultRequestTimeout    = 30 * time.Second
+	defaultRetryMaxAttempts  = 3
+	defaultRetryInitialDelay = 200 * time.Millisecond
+	defaultRetryMaxDelay     = 2 * time.Second
+	defaultRetryMultiplier   = 2
 	defaultConnectTimeout    = 5 * time.Minute
 	defaultDomain            = "e2b.app"
 	defaultEnvdPort          = 49983
@@ -27,6 +31,23 @@ type Config struct {
 	// RequestTimeout bounds every HTTP call to the control plane.
 	// Defaults to 30s when zero.
 	RequestTimeout time.Duration
+	// RetryPolicy controls retries for transient HTTP failures. Nil uses
+	// conservative defaults. Set MaxAttempts to 1 or use NoRetries to disable.
+	RetryPolicy *RetryPolicy
+}
+
+// RetryPolicy controls retries for transient HTTP failures. MaxAttempts is the
+// total number of tries, including the first request.
+type RetryPolicy struct {
+	MaxAttempts  int
+	InitialDelay time.Duration
+	MaxDelay     time.Duration
+	Multiplier   float64
+}
+
+// NoRetries returns a policy that disables retries.
+func NoRetries() *RetryPolicy {
+	return &RetryPolicy{MaxAttempts: 1}
 }
 
 func (c Config) apiBaseURL() string {
@@ -41,6 +62,31 @@ func (c Config) requestTimeout() time.Duration {
 		return defaultRequestTimeout
 	}
 	return c.RequestTimeout
+}
+
+func (c Config) retryPolicy() RetryPolicy {
+	policy := RetryPolicy{
+		MaxAttempts:  defaultRetryMaxAttempts,
+		InitialDelay: defaultRetryInitialDelay,
+		MaxDelay:     defaultRetryMaxDelay,
+		Multiplier:   defaultRetryMultiplier,
+	}
+	if c.RetryPolicy == nil {
+		return policy
+	}
+	if c.RetryPolicy.MaxAttempts > 0 {
+		policy.MaxAttempts = c.RetryPolicy.MaxAttempts
+	}
+	if c.RetryPolicy.InitialDelay > 0 {
+		policy.InitialDelay = c.RetryPolicy.InitialDelay
+	}
+	if c.RetryPolicy.MaxDelay > 0 {
+		policy.MaxDelay = c.RetryPolicy.MaxDelay
+	}
+	if c.RetryPolicy.Multiplier > 0 {
+		policy.Multiplier = c.RetryPolicy.Multiplier
+	}
+	return policy
 }
 
 func durationToWholeSeconds(value time.Duration) int {

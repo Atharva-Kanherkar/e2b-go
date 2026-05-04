@@ -397,26 +397,21 @@ func (v *Volume) doRequest(ctx context.Context, method string, route string, que
 		rawURL += "?" + encoded
 	}
 
-	req, err := http.NewRequestWithContext(ctx, method, rawURL, body)
-	if err != nil {
-		return 0, nil, nil, err
-	}
-	req.Header.Set("Authorization", "Bearer "+v.token)
-	if contentType != "" {
-		req.Header.Set("Content-Type", contentType)
+	var bodyBytes []byte
+	if body != nil {
+		var err error
+		bodyBytes, err = io.ReadAll(body)
+		if err != nil {
+			return 0, nil, nil, err
+		}
 	}
 
-	resp, err := v.api.controlHTTPClient.Do(req)
-	if err != nil {
-		return 0, nil, nil, err
-	}
-	defer resp.Body.Close()
-
-	responseBytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return resp.StatusCode, resp.Header.Clone(), nil, err
-	}
-	return resp.StatusCode, resp.Header.Clone(), responseBytes, nil
+	return v.api.doHTTPRequest(ctx, v.api.controlHTTPClient, method, rawURL, bodyBytes, v.api.shouldRetryRequest(method, rawURL), nil, func(header http.Header) {
+		header.Set("Authorization", "Bearer "+v.token)
+		if contentType != "" {
+			header.Set("Content-Type", contentType)
+		}
+	})
 }
 
 func addVolumeWriteOptions(query url.Values, options VolumeWriteOptions) {
