@@ -177,6 +177,8 @@ go test ./...
 go test -race ./...
 ```
 
+These checks are designed to run without live E2B credentials.
+
 ## Roadmap
 
 The highest-value remaining gaps are:
