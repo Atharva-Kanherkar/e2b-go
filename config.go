@@ -36,6 +36,9 @@ func (c Config) apiBaseURL() string {
 	return strings.TrimRight(strings.TrimSpace(c.APIBaseURL), "/")
 }
 
+// IsZero reports whether the Config is the zero value (no API key set).
+func (c Config) IsZero() bool { return c.APIKey == "" }
+
 func (c Config) requestTimeout() time.Duration {
 	if c.RequestTimeout <= 0 {
 		return defaultRequestTimeout
