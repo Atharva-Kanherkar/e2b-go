@@ -10,6 +10,9 @@ import (
 	"github.com/e2b-dev/infra/packages/shared/pkg/grpc/envd/process/processconnect"
 )
 
+// Version is the current SDK release string.
+const Version = "0.1.0"
+
 // Client is an authenticated handle to the E2B control plane. Safe for
 // concurrent use.
 type Client struct {

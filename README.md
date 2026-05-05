@@ -198,6 +198,11 @@ This repository exists because there is no official Go SDK at the time of
 writing. If the E2B team decides to ship or adopt one upstream, aligning this
 project with that effort would be the best long-term outcome.
 
+## Contributing
+
+Bug reports and pull requests are welcome. Please open an issue first to
+discuss larger changes before investing time in a PR.
+
 ## License
 
 MIT. See [LICENSE](./LICENSE).
