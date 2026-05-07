@@ -9,12 +9,25 @@ import (
 const (
 	defaultAPIBaseURL        = "https://api.e2b.app"
 	defaultRequestTimeout    = 30 * time.Second
+	defaultRetryMaxAttempts  = 3
+	defaultInitialBackoff    = 100 * time.Millisecond
+	defaultMaxBackoff        = 2 * time.Second
 	defaultConnectTimeout    = 5 * time.Minute
 	defaultDomain            = "e2b.app"
 	defaultEnvdPort          = 49983
 	defaultLegacySandboxUser = "user"
 	envdDefaultUserVersion   = "0.4.0"
 )
+
+// RetryPolicy controls retries for transient HTTP failures.
+//
+// MaxAttempts includes the initial request. MaxAttempts: 1 disables retries.
+// Zero-valued fields fall back to conservative defaults.
+type RetryPolicy struct {
+	MaxAttempts    int
+	InitialBackoff time.Duration
+	MaxBackoff     time.Duration
+}
 
 // Config carries connection settings for a Client. Zero values fall back to
 // sensible defaults (production API, 30s HTTP timeout).
@@ -27,6 +40,9 @@ type Config struct {
 	// RequestTimeout bounds every HTTP call to the control plane.
 	// Defaults to 30s when zero.
 	RequestTimeout time.Duration
+	// RetryPolicy controls retries for transient control-plane and direct envd
+	// file HTTP failures. Zero uses conservative SDK defaults.
+	RetryPolicy RetryPolicy
 }
 
 func (c Config) apiBaseURL() string {
@@ -41,6 +57,23 @@ func (c Config) requestTimeout() time.Duration {
 		return defaultRequestTimeout
 	}
 	return c.RequestTimeout
+}
+
+func (c Config) retryPolicy() RetryPolicy {
+	policy := c.RetryPolicy
+	if policy.MaxAttempts <= 0 {
+		policy.MaxAttempts = defaultRetryMaxAttempts
+	}
+	if policy.InitialBackoff <= 0 {
+		policy.InitialBackoff = defaultInitialBackoff
+	}
+	if policy.MaxBackoff <= 0 {
+		policy.MaxBackoff = defaultMaxBackoff
+	}
+	if policy.MaxBackoff < policy.InitialBackoff {
+		policy.MaxBackoff = policy.InitialBackoff
+	}
+	return policy
 }
 
 func durationToWholeSeconds(value time.Duration) int {

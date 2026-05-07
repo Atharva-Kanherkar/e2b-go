@@ -137,6 +137,23 @@ func TestConfigDefaults(t *testing.T) {
 	if c.requestTimeout() != defaultRequestTimeout {
 		t.Errorf("zero RequestTimeout should default to %v, got %v", defaultRequestTimeout, c.requestTimeout())
 	}
+	policy := c.retryPolicy()
+	if policy.MaxAttempts != defaultRetryMaxAttempts {
+		t.Errorf("zero RetryPolicy MaxAttempts should default to %d, got %d", defaultRetryMaxAttempts, policy.MaxAttempts)
+	}
+	if policy.InitialBackoff != defaultInitialBackoff {
+		t.Errorf("zero RetryPolicy InitialBackoff should default to %v, got %v", defaultInitialBackoff, policy.InitialBackoff)
+	}
+	if policy.MaxBackoff != defaultMaxBackoff {
+		t.Errorf("zero RetryPolicy MaxBackoff should default to %v, got %v", defaultMaxBackoff, policy.MaxBackoff)
+	}
+}
+
+func TestRetryPolicyMaxAttemptsOneMeansNoRetries(t *testing.T) {
+	policy := Config{RetryPolicy: RetryPolicy{MaxAttempts: 1}}.retryPolicy()
+	if policy.MaxAttempts != 1 {
+		t.Fatalf("MaxAttempts = %d, want 1", policy.MaxAttempts)
+	}
 }
 
 func TestConfigTrimsAPIBaseURL(t *testing.T) {

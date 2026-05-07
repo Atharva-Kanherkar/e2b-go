@@ -13,6 +13,7 @@ import (
 	"path"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/e2b-dev/infra/packages/shared/pkg/grpc/envd/filesystem/filesystemconnect"
 	"github.com/e2b-dev/infra/packages/shared/pkg/grpc/envd/process/processconnect"
@@ -24,6 +25,8 @@ type apiClient struct {
 	controlHTTPClient *http.Client
 	envdHTTPClient    *http.Client
 	config            Config
+	retrySleep        retrySleepFunc
+	retryNow          retryNowFunc
 }
 
 type sandboxRecord struct {
@@ -40,6 +43,8 @@ func newAPIClient(config Config) *apiClient {
 		controlHTTPClient: &http.Client{Timeout: config.requestTimeout()},
 		envdHTTPClient:    &http.Client{},
 		config:            config,
+		retrySleep:        defaultRetrySleep,
+		retryNow:          time.Now,
 	}
 }
 
@@ -85,8 +90,9 @@ func (c *apiClient) readFile(ctx context.Context, record sandboxRecord, filePath
 	if err != nil {
 		return nil, err
 	}
-	c.setEnvdHeaders(req.Header, record)
-	resp, err := c.envdHTTPClient.Do(req)
+	headers := req.Header.Clone()
+	c.setEnvdHeaders(headers, record)
+	resp, err := c.doRetryableHTTP(ctx, c.envdHTTPClient, http.MethodGet, req.URL.String(), nil, headers, true)
 	if err != nil {
 		return nil, err
 	}
@@ -121,10 +127,11 @@ func (c *apiClient) writeFile(ctx context.Context, record sandboxRecord, filePat
 	if err != nil {
 		return err
 	}
-	c.setEnvdHeaders(req.Header, record)
-	req.Header.Set("Content-Type", writer.FormDataContentType())
+	headers := req.Header.Clone()
+	c.setEnvdHeaders(headers, record)
+	headers.Set("Content-Type", writer.FormDataContentType())
 
-	resp, err := c.envdHTTPClient.Do(req)
+	resp, err := c.doRetryableHTTP(ctx, c.envdHTTPClient, http.MethodPost, req.URL.String(), append([]byte(nil), body.Bytes()...), headers, true)
 	if err != nil {
 		return err
 	}
@@ -176,21 +183,19 @@ func (c *apiClient) doJSON(ctx context.Context, method string, rawURL string, re
 }
 
 func (c *apiClient) doJSONWithResponse(ctx context.Context, method string, rawURL string, requestBody any, responseBody any, allowedEmptyStatuses map[int]struct{}, notFoundErr error) (int, http.Header, error) {
-	var body io.Reader
+	var body []byte
 	if requestBody != nil {
 		payload, err := json.Marshal(requestBody)
 		if err != nil {
 			return 0, nil, err
 		}
-		body = bytes.NewReader(payload)
+		body = payload
 	}
-	req, err := http.NewRequestWithContext(ctx, method, rawURL, body)
-	if err != nil {
-		return 0, nil, err
-	}
-	req.Header.Set("X-API-KEY", c.config.APIKey)
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := c.controlHTTPClient.Do(req)
+	headers := make(http.Header)
+	headers.Set("X-API-KEY", c.config.APIKey)
+	headers.Set("Content-Type", "application/json")
+
+	resp, err := c.doRetryableHTTP(ctx, c.controlHTTPClient, method, rawURL, body, headers, retryTemporaryNetworkErrors(method))
 	if err != nil {
 		return 0, nil, err
 	}
@@ -213,6 +218,50 @@ func (c *apiClient) doJSONWithResponse(ctx context.Context, method string, rawUR
 		return resp.StatusCode, resp.Header.Clone(), err
 	}
 	return resp.StatusCode, resp.Header.Clone(), nil
+}
+
+func (c *apiClient) doRetryableHTTP(ctx context.Context, client *http.Client, method string, rawURL string, body []byte, headers http.Header, retryNetworkErrors bool) (*http.Response, error) {
+	policy := c.config.retryPolicy()
+
+	for attempt := 1; ; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+
+		var reader io.Reader
+		if body != nil {
+			reader = bytes.NewReader(body)
+		}
+		req, err := http.NewRequestWithContext(ctx, method, rawURL, reader)
+		if err != nil {
+			return nil, err
+		}
+		req.Header = headers.Clone()
+
+		resp, err := client.Do(req)
+		if err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return nil, ctxErr
+			}
+			if attempt >= policy.MaxAttempts || !retryNetworkErrors || !isTemporaryNetworkError(err) {
+				return nil, err
+			}
+			if err := c.retrySleep(ctx, policy.backoff(attempt)); err != nil {
+				return nil, err
+			}
+			continue
+		}
+
+		if attempt >= policy.MaxAttempts || !isRetryableStatus(resp.StatusCode) {
+			return resp, nil
+		}
+
+		delay := retryDelay(resp.Header, policy, attempt, c.retryNow())
+		closeRetryResponse(resp)
+		if err := c.retrySleep(ctx, delay); err != nil {
+			return nil, err
+		}
+	}
 }
 
 // createSandboxRequest is the wire format of POST /sandboxes. Kept
