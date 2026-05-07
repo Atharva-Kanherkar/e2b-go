@@ -33,6 +33,7 @@ func TestDestroyFailedRequestIsRetryable(t *testing.T) {
 		APIKey:         "test-key",
 		APIBaseURL:     server.URL,
 		RequestTimeout: time.Second,
+		RetryPolicy:    RetryPolicy{MaxAttempts: 1},
 	})
 	sb := &Sandbox{
 		client: sandboxTransport{

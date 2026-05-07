@@ -6,7 +6,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io"
 	"mime/multipart"
 	"net/http"
 	"net/url"
@@ -24,6 +23,7 @@ type apiClient struct {
 	controlHTTPClient *http.Client
 	envdHTTPClient    *http.Client
 	config            Config
+	sleep             retrySleepFunc
 }
 
 type sandboxRecord struct {
@@ -86,18 +86,12 @@ func (c *apiClient) readFile(ctx context.Context, record sandboxRecord, filePath
 		return nil, err
 	}
 	c.setEnvdHeaders(req.Header, record)
-	resp, err := c.envdHTTPClient.Do(req)
+	status, _, body, err := c.doHTTPWithRetry(ctx, c.envdHTTPClient, req.Method, req.URL.String(), nil, req.Header)
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode >= 300 {
-		return nil, normalizeHTTPError(resp.StatusCode, string(body), ErrFileNotFound)
+	if status >= 300 {
+		return nil, normalizeHTTPError(status, string(body), ErrFileNotFound)
 	}
 	return body, nil
 }
@@ -124,18 +118,12 @@ func (c *apiClient) writeFile(ctx context.Context, record sandboxRecord, filePat
 	c.setEnvdHeaders(req.Header, record)
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 
-	resp, err := c.envdHTTPClient.Do(req)
+	status, _, respBody, err := c.doHTTPWithRetry(ctx, c.envdHTTPClient, req.Method, req.URL.String(), body.Bytes(), req.Header)
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return err
-	}
-	if resp.StatusCode >= 300 {
-		return normalizeHTTPError(resp.StatusCode, string(respBody), nil)
+	if status >= 300 {
+		return normalizeHTTPError(status, string(respBody), nil)
 	}
 	return nil
 }
@@ -176,43 +164,38 @@ func (c *apiClient) doJSON(ctx context.Context, method string, rawURL string, re
 }
 
 func (c *apiClient) doJSONWithResponse(ctx context.Context, method string, rawURL string, requestBody any, responseBody any, allowedEmptyStatuses map[int]struct{}, notFoundErr error) (int, http.Header, error) {
-	var body io.Reader
+	var bodyBytes []byte
 	if requestBody != nil {
 		payload, err := json.Marshal(requestBody)
 		if err != nil {
 			return 0, nil, err
 		}
-		body = bytes.NewReader(payload)
+		bodyBytes = payload
 	}
-	req, err := http.NewRequestWithContext(ctx, method, rawURL, body)
+	req, err := http.NewRequestWithContext(ctx, method, rawURL, bytes.NewReader(bodyBytes))
 	if err != nil {
 		return 0, nil, err
 	}
 	req.Header.Set("X-API-KEY", c.config.APIKey)
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := c.controlHTTPClient.Do(req)
+	status, headers, respBytes, err := c.doHTTPWithRetry(ctx, c.controlHTTPClient, req.Method, req.URL.String(), bodyBytes, req.Header)
 	if err != nil {
 		return 0, nil, err
 	}
-	defer resp.Body.Close()
 
-	respBytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return resp.StatusCode, resp.Header.Clone(), err
+	if _, ok := allowedEmptyStatuses[status]; ok {
+		return status, headers, nil
 	}
-	if _, ok := allowedEmptyStatuses[resp.StatusCode]; ok {
-		return resp.StatusCode, resp.Header.Clone(), nil
-	}
-	if resp.StatusCode >= 300 {
-		return resp.StatusCode, resp.Header.Clone(), normalizeHTTPError(resp.StatusCode, string(respBytes), notFoundErr)
+	if status >= 300 {
+		return status, headers, normalizeHTTPError(status, string(respBytes), notFoundErr)
 	}
 	if responseBody == nil {
-		return resp.StatusCode, resp.Header.Clone(), nil
+		return status, headers, nil
 	}
 	if err := json.Unmarshal(respBytes, responseBody); err != nil {
-		return resp.StatusCode, resp.Header.Clone(), err
+		return status, headers, err
 	}
-	return resp.StatusCode, resp.Header.Clone(), nil
+	return status, headers, nil
 }
 
 // createSandboxRequest is the wire format of POST /sandboxes. Kept
