@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-func TestDestroyFailedRequestIsRetryable(t *testing.T) {
+func TestDestroyAutoRetriesTransientFailure(t *testing.T) {
 	deleteCalls := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodDelete {
@@ -41,20 +41,19 @@ func TestDestroyFailedRequestIsRetryable(t *testing.T) {
 		},
 	}
 
-	if err := sb.Destroy(context.Background()); err == nil {
-		t.Fatal("Destroy() error = nil, want transient failure")
-	}
-	if err := sb.ensureActive(); err != nil {
-		t.Fatalf("ensureActive() after failed destroy = %v, want nil", err)
-	}
+	// The retry policy handles the 500 automatically; Destroy returns nil.
 	if err := sb.Destroy(context.Background()); err != nil {
-		t.Fatalf("Destroy() retry error = %v, want nil", err)
-	}
-	if err := sb.Destroy(context.Background()); err != nil {
-		t.Fatalf("Destroy() after success error = %v, want nil", err)
+		t.Fatalf("Destroy() error = %v, want nil (auto-retry should succeed)", err)
 	}
 	if deleteCalls != 2 {
-		t.Fatalf("deleteCalls = %d, want 2", deleteCalls)
+		t.Fatalf("deleteCalls = %d, want 2 (one transient + one success)", deleteCalls)
+	}
+	// Idempotent: already destroyed, no further HTTP calls.
+	if err := sb.Destroy(context.Background()); err != nil {
+		t.Fatalf("Destroy() idempotent call error = %v, want nil", err)
+	}
+	if deleteCalls != 2 {
+		t.Fatalf("deleteCalls after idempotent = %d, want 2", deleteCalls)
 	}
 }
 

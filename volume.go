@@ -324,7 +324,7 @@ func (v *Volume) WriteFile(ctx context.Context, path string, content []byte, opt
 	query.Set("path", path)
 	addVolumeWriteOptions(query, options)
 
-	status, _, body, err := v.doRequest(ctx, http.MethodPut, "/volumecontent/"+v.volumeID+"/file", query, bytes.NewReader(content), "application/octet-stream")
+	status, _, body, err := v.doRequest(ctx, http.MethodPut, "/volumecontent/"+v.volumeID+"/file", query, content, "application/octet-stream")
 	if err != nil {
 		return VolumeEntryInfo{}, err
 	}
@@ -363,16 +363,16 @@ func (v *Volume) doJSON(ctx context.Context, method string, route string, query 
 }
 
 func (v *Volume) doJSONWithStatus(ctx context.Context, method string, route string, query url.Values, requestBody any, responseBody any, allowedStatuses map[int]struct{}, notFoundErr error) (int, http.Header, error) {
-	var body io.Reader
+	var payload []byte
 	if requestBody != nil {
-		payload, err := json.Marshal(requestBody)
+		var err error
+		payload, err = json.Marshal(requestBody)
 		if err != nil {
 			return 0, nil, err
 		}
-		body = bytes.NewReader(payload)
 	}
 
-	status, headers, responseBytes, err := v.doRequest(ctx, method, route, query, body, "application/json")
+	status, headers, responseBytes, err := v.doRequest(ctx, method, route, query, payload, "application/json")
 	if err != nil {
 		return 0, nil, err
 	}
@@ -391,32 +391,63 @@ func (v *Volume) doJSONWithStatus(ctx context.Context, method string, route stri
 	return status, headers, nil
 }
 
-func (v *Volume) doRequest(ctx context.Context, method string, route string, query url.Values, body io.Reader, contentType string) (int, http.Header, []byte, error) {
+func (v *Volume) doRequest(ctx context.Context, method string, route string, query url.Values, body []byte, contentType string) (int, http.Header, []byte, error) {
 	rawURL := v.api.config.apiBaseURL() + route
 	if encoded := query.Encode(); encoded != "" {
 		rawURL += "?" + encoded
 	}
 
-	req, err := http.NewRequestWithContext(ctx, method, rawURL, body)
-	if err != nil {
-		return 0, nil, nil, err
-	}
-	req.Header.Set("Authorization", "Bearer "+v.token)
-	if contentType != "" {
-		req.Header.Set("Content-Type", contentType)
-	}
+	var (
+		lastStatus    int
+		lastHeaders   http.Header
+		lastRespBytes []byte
+	)
 
-	resp, err := v.api.controlHTTPClient.Do(req)
-	if err != nil {
-		return 0, nil, nil, err
-	}
-	defer resp.Body.Close()
+	err := v.api.retrier.do(ctx, func() (int, string, error) {
+		lastStatus = 0
+		lastHeaders = nil
+		lastRespBytes = nil
 
-	responseBytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return resp.StatusCode, resp.Header.Clone(), nil, err
+		var bodyReader io.Reader
+		if body != nil {
+			bodyReader = bytes.NewReader(body)
+		}
+		req, err := http.NewRequestWithContext(ctx, method, rawURL, bodyReader)
+		if err != nil {
+			return 0, "", err
+		}
+		req.Header.Set("Authorization", "Bearer "+v.token)
+		if contentType != "" {
+			req.Header.Set("Content-Type", contentType)
+		}
+
+		resp, err := v.api.controlHTTPClient.Do(req)
+		if err != nil {
+			return 0, "", err
+		}
+		defer resp.Body.Close()
+
+		lastStatus = resp.StatusCode
+		lastHeaders = resp.Header.Clone()
+
+		responseBytes, err := io.ReadAll(resp.Body)
+		lastRespBytes = responseBytes
+		if err != nil {
+			return resp.StatusCode, resp.Header.Get("Retry-After"), err
+		}
+		if isRetryableStatus(resp.StatusCode) {
+			return resp.StatusCode, resp.Header.Get("Retry-After"), &retryableSentinel{resp.StatusCode}
+		}
+		return resp.StatusCode, "", nil
+	})
+
+	// retryableSentinel signals retryable status to the loop but must not be
+	// surfaced to callers, which inspect the raw status code themselves.
+	var sentinel *retryableSentinel
+	if errors.As(err, &sentinel) {
+		err = nil
 	}
-	return resp.StatusCode, resp.Header.Clone(), responseBytes, nil
+	return lastStatus, lastHeaders, lastRespBytes, err
 }
 
 func addVolumeWriteOptions(query url.Values, options VolumeWriteOptions) {
