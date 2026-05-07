@@ -24,6 +24,7 @@ type apiClient struct {
 	controlHTTPClient *http.Client
 	envdHTTPClient    *http.Client
 	config            Config
+	sleep             sleepFunc
 }
 
 type sandboxRecord struct {
@@ -40,6 +41,7 @@ func newAPIClient(config Config) *apiClient {
 		controlHTTPClient: &http.Client{Timeout: config.requestTimeout()},
 		envdHTTPClient:    &http.Client{},
 		config:            config,
+		sleep:             defaultSleep,
 	}
 }
 
@@ -80,31 +82,43 @@ func (c *apiClient) processClient(record sandboxRecord) processconnect.ProcessCl
 }
 
 func (c *apiClient) readFile(ctx context.Context, record sandboxRecord, filePath string) ([]byte, error) {
-	values := c.envdFileQuery(record, filePath)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.envdBaseURL(record)+"/files?"+values.Encode(), nil)
-	if err != nil {
-		return nil, err
-	}
-	c.setEnvdHeaders(req.Header, record)
-	resp, err := c.envdHTTPClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
+	rawURL := c.envdBaseURL(record) + "/files?" + c.envdFileQuery(record, filePath).Encode()
 
-	body, err := io.ReadAll(resp.Body)
+	var result []byte
+	_, _, err := doWithRetry(ctx, c.config.RetryPolicy, c.sleep, func() (int, http.Header, bool, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+		if err != nil {
+			return 0, nil, false, err
+		}
+		c.setEnvdHeaders(req.Header, record)
+
+		resp, err := c.envdHTTPClient.Do(req)
+		if err != nil {
+			return 0, nil, isTransientNetworkError(err), err
+		}
+		defer resp.Body.Close()
+
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return resp.StatusCode, resp.Header.Clone(), false, err
+		}
+		if resp.StatusCode >= 300 {
+			return resp.StatusCode, resp.Header.Clone(), isRetryableStatus(resp.StatusCode),
+				normalizeHTTPError(resp.StatusCode, string(body), ErrFileNotFound)
+		}
+		result = body
+		return resp.StatusCode, resp.Header.Clone(), false, nil
+	})
 	if err != nil {
 		return nil, err
 	}
-	if resp.StatusCode >= 300 {
-		return nil, normalizeHTTPError(resp.StatusCode, string(body), ErrFileNotFound)
-	}
-	return body, nil
+	return result, nil
 }
 
 func (c *apiClient) writeFile(ctx context.Context, record sandboxRecord, filePath string, content []byte) error {
-	var body bytes.Buffer
-	writer := multipart.NewWriter(&body)
+	// Build the multipart body once; replay the same bytes on every attempt.
+	var formBuf bytes.Buffer
+	writer := multipart.NewWriter(&formBuf)
 	part, err := writer.CreateFormFile("file", path.Base(strings.TrimSpace(filePath)))
 	if err != nil {
 		return err
@@ -115,29 +129,35 @@ func (c *apiClient) writeFile(ctx context.Context, record sandboxRecord, filePat
 	if err := writer.Close(); err != nil {
 		return err
 	}
+	formBytes := formBuf.Bytes()
+	contentType := writer.FormDataContentType()
+	rawURL := c.envdBaseURL(record) + "/files?" + c.envdFileQuery(record, filePath).Encode()
 
-	values := c.envdFileQuery(record, filePath)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.envdBaseURL(record)+"/files?"+values.Encode(), &body)
-	if err != nil {
-		return err
-	}
-	c.setEnvdHeaders(req.Header, record)
-	req.Header.Set("Content-Type", writer.FormDataContentType())
+	_, _, err = doWithRetry(ctx, c.config.RetryPolicy, c.sleep, func() (int, http.Header, bool, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, rawURL, bytes.NewReader(formBytes))
+		if err != nil {
+			return 0, nil, false, err
+		}
+		c.setEnvdHeaders(req.Header, record)
+		req.Header.Set("Content-Type", contentType)
 
-	resp, err := c.envdHTTPClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
+		resp, err := c.envdHTTPClient.Do(req)
+		if err != nil {
+			return 0, nil, isTransientNetworkError(err), err
+		}
+		defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return err
-	}
-	if resp.StatusCode >= 300 {
-		return normalizeHTTPError(resp.StatusCode, string(respBody), nil)
-	}
-	return nil
+		respBody, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return resp.StatusCode, resp.Header.Clone(), false, err
+		}
+		if resp.StatusCode >= 300 {
+			return resp.StatusCode, resp.Header.Clone(), isRetryableStatus(resp.StatusCode),
+				normalizeHTTPError(resp.StatusCode, string(respBody), nil)
+		}
+		return resp.StatusCode, resp.Header.Clone(), false, nil
+	})
+	return err
 }
 
 func (c *apiClient) setEnvdHeaders(header http.Header, record sandboxRecord) {
@@ -176,43 +196,54 @@ func (c *apiClient) doJSON(ctx context.Context, method string, rawURL string, re
 }
 
 func (c *apiClient) doJSONWithResponse(ctx context.Context, method string, rawURL string, requestBody any, responseBody any, allowedEmptyStatuses map[int]struct{}, notFoundErr error) (int, http.Header, error) {
-	var body io.Reader
+	// Marshal once; create a fresh reader for every attempt so the body can
+	// be replayed across retries.
+	var payload []byte
 	if requestBody != nil {
-		payload, err := json.Marshal(requestBody)
+		var err error
+		payload, err = json.Marshal(requestBody)
 		if err != nil {
 			return 0, nil, err
 		}
-		body = bytes.NewReader(payload)
 	}
-	req, err := http.NewRequestWithContext(ctx, method, rawURL, body)
-	if err != nil {
-		return 0, nil, err
-	}
-	req.Header.Set("X-API-KEY", c.config.APIKey)
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := c.controlHTTPClient.Do(req)
-	if err != nil {
-		return 0, nil, err
-	}
-	defer resp.Body.Close()
 
-	respBytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return resp.StatusCode, resp.Header.Clone(), err
-	}
-	if _, ok := allowedEmptyStatuses[resp.StatusCode]; ok {
-		return resp.StatusCode, resp.Header.Clone(), nil
-	}
-	if resp.StatusCode >= 300 {
-		return resp.StatusCode, resp.Header.Clone(), normalizeHTTPError(resp.StatusCode, string(respBytes), notFoundErr)
-	}
-	if responseBody == nil {
-		return resp.StatusCode, resp.Header.Clone(), nil
-	}
-	if err := json.Unmarshal(respBytes, responseBody); err != nil {
-		return resp.StatusCode, resp.Header.Clone(), err
-	}
-	return resp.StatusCode, resp.Header.Clone(), nil
+	return doWithRetry(ctx, c.config.RetryPolicy, c.sleep, func() (int, http.Header, bool, error) {
+		var body io.Reader
+		if payload != nil {
+			body = bytes.NewReader(payload)
+		}
+		req, err := http.NewRequestWithContext(ctx, method, rawURL, body)
+		if err != nil {
+			return 0, nil, false, err
+		}
+		req.Header.Set("X-API-KEY", c.config.APIKey)
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err := c.controlHTTPClient.Do(req)
+		if err != nil {
+			return 0, nil, isTransientNetworkError(err), err
+		}
+		defer resp.Body.Close()
+
+		respBytes, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return resp.StatusCode, resp.Header.Clone(), false, err
+		}
+		if _, ok := allowedEmptyStatuses[resp.StatusCode]; ok {
+			return resp.StatusCode, resp.Header.Clone(), false, nil
+		}
+		if resp.StatusCode >= 300 {
+			return resp.StatusCode, resp.Header.Clone(), isRetryableStatus(resp.StatusCode),
+				normalizeHTTPError(resp.StatusCode, string(respBytes), notFoundErr)
+		}
+		if responseBody == nil {
+			return resp.StatusCode, resp.Header.Clone(), false, nil
+		}
+		if err := json.Unmarshal(respBytes, responseBody); err != nil {
+			return resp.StatusCode, resp.Header.Clone(), false, err
+		}
+		return resp.StatusCode, resp.Header.Clone(), false, nil
+	})
 }
 
 // createSandboxRequest is the wire format of POST /sandboxes. Kept
