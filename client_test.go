@@ -137,6 +137,9 @@ func TestConfigDefaults(t *testing.T) {
 	if c.requestTimeout() != defaultRequestTimeout {
 		t.Errorf("zero RequestTimeout should default to %v, got %v", defaultRequestTimeout, c.requestTimeout())
 	}
+	if got := c.retryPolicy(); got.MaxAttempts != defaultRetryMaxAttempts || got.InitialBackoff != defaultRetryInitialDelay || got.MaxBackoff != defaultRetryMaxDelay {
+		t.Errorf("zero RetryPolicy should use defaults, got %#v", got)
+	}
 }
 
 func TestConfigTrimsAPIBaseURL(t *testing.T) {

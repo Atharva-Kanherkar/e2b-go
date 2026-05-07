@@ -138,6 +138,24 @@ The package exposes sentinel errors intended for `errors.Is` checks:
 - `e2b.ErrSandboxDestroyed`
 - `e2b.ErrVolumeNotFound`
 
+## Retry Policy
+
+Transient control-plane REST failures and direct envd file HTTP reads/writes are
+retried by default. Customize the policy with `Config.RetryPolicy`:
+
+```go
+client := e2b.NewClientWithConfig(e2b.Config{
+	APIKey: "E2B_API_KEY",
+	RetryPolicy: e2b.RetryPolicy{
+		MaxAttempts:    4,
+		InitialBackoff: 250 * time.Millisecond,
+		MaxBackoff:     2 * time.Second,
+	},
+})
+```
+
+Use `RetryPolicy{MaxAttempts: 1}` to disable retries.
+
 ## CreateRequest
 
 `CreateRequest` controls sandbox provisioning:
