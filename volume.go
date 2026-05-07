@@ -401,6 +401,7 @@ func (v *Volume) doRequest(ctx context.Context, method string, route string, que
 	if err != nil {
 		return 0, nil, nil, err
 	}
+	req.Header.Set("User-Agent", v.api.config.userAgent())
 	req.Header.Set("Authorization", "Bearer "+v.token)
 	if contentType != "" {
 		req.Header.Set("Content-Type", contentType)

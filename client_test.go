@@ -1,8 +1,13 @@
 package e2b
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -216,5 +221,80 @@ func TestLegacySandboxAuthHeader(t *testing.T) {
 	}
 	if got := legacySandboxAuthHeader("0.4.0"); got != "" {
 		t.Fatalf("legacySandboxAuthHeader(modern) = %q, want empty string", got)
+	}
+}
+
+func TestUserAgentDefault(t *testing.T) {
+	var gotUA string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotUA = r.Header.Get("User-Agent")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[]`))
+	}))
+	defer server.Close()
+
+	client := newAPIClient(Config{APIKey: "test", APIBaseURL: server.URL})
+	var result []any
+	_ = client.doJSON(context.Background(), http.MethodGet, server.URL+"/sandboxes", nil, &result, nil, nil)
+
+	if gotUA != defaultUserAgent {
+		t.Fatalf("User-Agent = %q, want %q", gotUA, defaultUserAgent)
+	}
+}
+
+func TestUserAgentCustomControlPlane(t *testing.T) {
+	var gotUA string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotUA = r.Header.Get("User-Agent")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[]`))
+	}))
+	defer server.Close()
+
+	client := newAPIClient(Config{APIKey: "test", APIBaseURL: server.URL, UserAgent: "myapp/1.0"})
+	var result []any
+	_ = client.doJSON(context.Background(), http.MethodGet, server.URL+"/sandboxes", nil, &result, nil, nil)
+
+	want := defaultUserAgent + " myapp/1.0"
+	if gotUA != want {
+		t.Fatalf("User-Agent = %q, want %q", gotUA, want)
+	}
+}
+
+// roundTripFunc allows constructing an http.RoundTripper from a plain function.
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
+
+func TestUserAgentEnvdFileHTTP(t *testing.T) {
+	tests := []struct {
+		name      string
+		userAgent string
+		wantUA    string
+	}{
+		{name: "default", userAgent: "", wantUA: defaultUserAgent},
+		{name: "custom", userAgent: "scanner/2", wantUA: defaultUserAgent + " scanner/2"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var gotUA string
+			client := newAPIClient(Config{UserAgent: tc.userAgent})
+			client.envdHTTPClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				gotUA = req.Header.Get("User-Agent")
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader("hello")),
+					Header:     make(http.Header),
+				}, nil
+			})
+
+			record := sandboxRecord{SandboxID: "sbx-test", EnvdAccessToken: "tok"}
+			_, _ = client.readFile(context.Background(), record, "/workspace/test.txt")
+
+			if gotUA != tc.wantUA {
+				t.Fatalf("User-Agent = %q, want %q", gotUA, tc.wantUA)
+			}
+		})
 	}
 }
