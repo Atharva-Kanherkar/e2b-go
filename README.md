@@ -129,6 +129,30 @@ The public surface is organized around three main handles:
 - `Sandbox` for envd-backed filesystem, command, PTY, and runtime methods
 - `Volume` for persistent volume content operations
 
+## Retry Policy
+
+By default the client retries transient HTTP failures (408, 409, 425, 429, and
+5xx responses, plus network timeouts) with exponential back-off: 3 total
+attempts, 500 ms initial delay, 30 s cap.  `Retry-After` response headers are
+honoured in both integer-seconds and HTTP-date formats.
+
+```go
+client := e2b.NewClientWithConfig(e2b.Config{
+    APIKey: "E2B_API_KEY",
+    RetryPolicy: e2b.RetryPolicy{
+        MaxAttempts:    5,
+        InitialBackoff: 250 * time.Millisecond,
+        MaxBackoff:     10 * time.Second,
+    },
+})
+```
+
+To disable retries entirely set `MaxAttempts` to `1`:
+
+```go
+e2b.RetryPolicy{MaxAttempts: 1}
+```
+
 ## Error Handling
 
 The package exposes sentinel errors intended for `errors.Is` checks:

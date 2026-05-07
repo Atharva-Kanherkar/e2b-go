@@ -29,10 +29,13 @@ func TestDestroyFailedRequestIsRetryable(t *testing.T) {
 	}))
 	defer server.Close()
 
+	// Disable SDK-level retries so the transient 500 surfaces to the caller;
+	// the test verifies that sandbox state still permits a manual caller retry.
 	client := NewClientWithConfig(Config{
 		APIKey:         "test-key",
 		APIBaseURL:     server.URL,
 		RequestTimeout: time.Second,
+		RetryPolicy:    RetryPolicy{MaxAttempts: 1},
 	})
 	sb := &Sandbox{
 		client: sandboxTransport{
