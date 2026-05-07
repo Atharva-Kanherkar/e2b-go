@@ -14,6 +14,7 @@ const (
 	defaultEnvdPort          = 49983
 	defaultLegacySandboxUser = "user"
 	envdDefaultUserVersion   = "0.4.0"
+	defaultUserAgent         = "e2b-go"
 )
 
 // Config carries connection settings for a Client. Zero values fall back to
@@ -27,6 +28,9 @@ type Config struct {
 	// RequestTimeout bounds every HTTP call to the control plane.
 	// Defaults to 30s when zero.
 	RequestTimeout time.Duration
+	// UserAgent appends a custom identifier to the SDK's default User-Agent
+	// header sent on every HTTP request. Defaults to "e2b-go" when empty.
+	UserAgent string
 }
 
 func (c Config) apiBaseURL() string {
@@ -41,6 +45,13 @@ func (c Config) requestTimeout() time.Duration {
 		return defaultRequestTimeout
 	}
 	return c.RequestTimeout
+}
+
+func (c Config) userAgent() string {
+	if strings.TrimSpace(c.UserAgent) == "" {
+		return defaultUserAgent
+	}
+	return defaultUserAgent + " " + strings.TrimSpace(c.UserAgent)
 }
 
 func durationToWholeSeconds(value time.Duration) int {

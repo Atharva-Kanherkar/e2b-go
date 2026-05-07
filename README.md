@@ -153,6 +153,19 @@ The package exposes sentinel errors intended for `errors.Is` checks:
 | `AdditionalPackages` | Debian packages installed with `apt-get` before `CreateSandbox` returns. |
 | `AllowShellFallback` | Enables shell-based fallbacks for selected filesystem operations. |
 
+## Custom User-Agent
+
+Set `Config.UserAgent` to append a product identifier to every outgoing request.
+The SDK always prefixes its own name, so the final header is `e2b-go <your-value>`.
+
+```go
+client := e2b.NewClientWithConfig(e2b.Config{
+    APIKey:    "E2B_API_KEY",
+    UserAgent: "myapp/1.0",
+})
+// All requests carry: User-Agent: e2b-go myapp/1.0
+```
+
 ## Architecture
 
 The SDK uses three underlying transports:

@@ -86,6 +86,7 @@ func (c *apiClient) readFile(ctx context.Context, record sandboxRecord, filePath
 		return nil, err
 	}
 	c.setEnvdHeaders(req.Header, record)
+	req.Header.Set("User-Agent", c.config.userAgent())
 	resp, err := c.envdHTTPClient.Do(req)
 	if err != nil {
 		return nil, err
@@ -122,6 +123,7 @@ func (c *apiClient) writeFile(ctx context.Context, record sandboxRecord, filePat
 		return err
 	}
 	c.setEnvdHeaders(req.Header, record)
+	req.Header.Set("User-Agent", c.config.userAgent())
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 
 	resp, err := c.envdHTTPClient.Do(req)
@@ -188,6 +190,7 @@ func (c *apiClient) doJSONWithResponse(ctx context.Context, method string, rawUR
 	if err != nil {
 		return 0, nil, err
 	}
+	req.Header.Set("User-Agent", c.config.userAgent())
 	req.Header.Set("X-API-KEY", c.config.APIKey)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := c.controlHTTPClient.Do(req)
