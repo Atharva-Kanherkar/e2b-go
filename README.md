@@ -85,6 +85,22 @@ func main() {
 }
 ```
 
+## Configuration
+
+Use `NewClientWithConfig` to tune transport behavior. A zero `RetryPolicy` uses
+conservative defaults; set `MaxAttempts: 1` to disable retries.
+
+```go
+client := e2b.NewClientWithConfig(e2b.Config{
+	APIKey: "E2B_API_KEY",
+	RetryPolicy: e2b.RetryPolicy{
+		MaxAttempts:    4,
+		InitialBackoff: 200 * time.Millisecond,
+		MaxBackoff:     2 * time.Second,
+	},
+})
+```
+
 ## Feature Coverage
 
 ### Sandbox lifecycle
