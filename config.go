@@ -21,6 +21,9 @@ const (
 type Config struct {
 	// APIKey authenticates all control-plane calls. Required.
 	APIKey string
+	// UserAgent, when set, is sent as the User-Agent header on SDK HTTP
+	// requests. Empty preserves Go's default HTTP client behavior.
+	UserAgent string
 	// APIBaseURL overrides the control-plane host. Defaults to
 	// https://api.e2b.app when empty.
 	APIBaseURL string
@@ -41,6 +44,10 @@ func (c Config) requestTimeout() time.Duration {
 		return defaultRequestTimeout
 	}
 	return c.RequestTimeout
+}
+
+func (c Config) userAgent() string {
+	return strings.TrimSpace(c.UserAgent)
 }
 
 func durationToWholeSeconds(value time.Duration) int {

@@ -141,9 +141,16 @@ func (c *apiClient) writeFile(ctx context.Context, record sandboxRecord, filePat
 }
 
 func (c *apiClient) setEnvdHeaders(header http.Header, record sandboxRecord) {
+	c.setUserAgent(header)
 	header.Set("X-Access-Token", record.EnvdAccessToken)
 	header.Set("E2b-Sandbox-Id", record.SandboxID)
 	header.Set("E2b-Sandbox-Port", strconv.Itoa(defaultEnvdPort))
+}
+
+func (c *apiClient) setUserAgent(header http.Header) {
+	if userAgent := c.config.userAgent(); userAgent != "" {
+		header.Set("User-Agent", userAgent)
+	}
 }
 
 func (c *apiClient) envdFileQuery(record sandboxRecord, filePath string) url.Values {
@@ -188,6 +195,7 @@ func (c *apiClient) doJSONWithResponse(ctx context.Context, method string, rawUR
 	if err != nil {
 		return 0, nil, err
 	}
+	c.setUserAgent(req.Header)
 	req.Header.Set("X-API-KEY", c.config.APIKey)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := c.controlHTTPClient.Do(req)

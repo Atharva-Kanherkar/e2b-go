@@ -1,8 +1,13 @@
 package e2b
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 )
@@ -137,6 +142,9 @@ func TestConfigDefaults(t *testing.T) {
 	if c.requestTimeout() != defaultRequestTimeout {
 		t.Errorf("zero RequestTimeout should default to %v, got %v", defaultRequestTimeout, c.requestTimeout())
 	}
+	if c.userAgent() != "" {
+		t.Errorf("empty UserAgent should preserve default behavior, got %q", c.userAgent())
+	}
 }
 
 func TestConfigTrimsAPIBaseURL(t *testing.T) {
@@ -175,6 +183,95 @@ func TestNewAPIClientSeparatesControlAndEnvdTimeouts(t *testing.T) {
 	}
 	if got := client.envdHTTPClient.Timeout; got != 0 {
 		t.Fatalf("envdHTTPClient.Timeout = %v, want 0", got)
+	}
+}
+
+func TestControlPlaneRequestsPreserveDefaultUserAgent(t *testing.T) {
+	var gotUserAgent string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotUserAgent = r.UserAgent()
+		if got, want := r.Header.Get("X-API-KEY"), "test-key"; got != want {
+			t.Fatalf("X-API-KEY = %q, want %q", got, want)
+		}
+	}))
+	defer server.Close()
+
+	client := newAPIClient(Config{APIKey: "test-key", APIBaseURL: server.URL})
+	if err := client.doJSON(context.Background(), http.MethodGet, server.URL+"/ping", nil, nil, nil, nil); err != nil {
+		t.Fatalf("doJSON() error = %v", err)
+	}
+
+	if got, want := gotUserAgent, "Go-http-client/1.1"; got != want {
+		t.Fatalf("User-Agent = %q, want %q", got, want)
+	}
+}
+
+func TestControlPlaneRequestsUseCustomUserAgent(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got, want := r.UserAgent(), "pdfflow-go/1.0"; got != want {
+			t.Fatalf("User-Agent = %q, want %q", got, want)
+		}
+		if got, want := r.Header.Get("X-API-KEY"), "test-key"; got != want {
+			t.Fatalf("X-API-KEY = %q, want %q", got, want)
+		}
+	}))
+	defer server.Close()
+
+	client := newAPIClient(Config{
+		APIKey:     "test-key",
+		APIBaseURL: server.URL,
+		UserAgent:  "  pdfflow-go/1.0  ",
+	})
+	if err := client.doJSON(context.Background(), http.MethodGet, server.URL+"/ping", nil, nil, nil, nil); err != nil {
+		t.Fatalf("doJSON() error = %v", err)
+	}
+}
+
+func TestEnvdFileHTTPRequestsUseCustomUserAgent(t *testing.T) {
+	client := newAPIClient(Config{UserAgent: "pdfflow-go/1.0"})
+	var requests []*http.Request
+	client.envdHTTPClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		requests = append(requests, req)
+		if got, want := req.UserAgent(), "pdfflow-go/1.0"; got != want {
+			t.Fatalf("User-Agent = %q, want %q", got, want)
+		}
+		if got, want := req.Header.Get("X-Access-Token"), "envd-token"; got != want {
+			t.Fatalf("X-Access-Token = %q, want %q", got, want)
+		}
+		if got, want := req.Header.Get("E2b-Sandbox-Id"), "sbx-ua"; got != want {
+			t.Fatalf("E2b-Sandbox-Id = %q, want %q", got, want)
+		}
+		if got, want := req.Header.Get("E2b-Sandbox-Port"), "49983"; got != want {
+			t.Fatalf("E2b-Sandbox-Port = %q, want %q", got, want)
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(bytes.NewReader(nil)),
+			Request:    req,
+		}, nil
+	})
+	record := sandboxRecord{
+		SandboxID:       "sbx-ua",
+		EnvdAccessToken: "envd-token",
+		EnvdVersion:     "0.4.4",
+	}
+
+	if _, err := client.readFile(context.Background(), record, "/workspace/read.txt"); err != nil {
+		t.Fatalf("readFile() error = %v", err)
+	}
+	if err := client.writeFile(context.Background(), record, "/workspace/write.txt", []byte("hi")); err != nil {
+		t.Fatalf("writeFile() error = %v", err)
+	}
+
+	if got, want := len(requests), 2; got != want {
+		t.Fatalf("envd file request count = %d, want %d", got, want)
+	}
+	if got, want := requests[0].Method, http.MethodGet; got != want {
+		t.Fatalf("read method = %q, want %q", got, want)
+	}
+	if got, want := requests[1].Method, http.MethodPost; got != want {
+		t.Fatalf("write method = %q, want %q", got, want)
 	}
 }
 
@@ -217,4 +314,10 @@ func TestLegacySandboxAuthHeader(t *testing.T) {
 	if got := legacySandboxAuthHeader("0.4.0"); got != "" {
 		t.Fatalf("legacySandboxAuthHeader(modern) = %q, want empty string", got)
 	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
 }

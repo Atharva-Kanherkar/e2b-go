@@ -85,6 +85,15 @@ func main() {
 }
 ```
 
+To identify your integration in outbound SDK requests, set a custom user agent:
+
+```go
+client := e2b.NewClientWithConfig(e2b.Config{
+	APIKey:    "E2B_API_KEY",
+	UserAgent: "my-service/1.0",
+})
+```
+
 ## Feature Coverage
 
 ### Sandbox lifecycle
