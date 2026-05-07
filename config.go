@@ -17,7 +17,7 @@ const (
 )
 
 // Config carries connection settings for a Client. Zero values fall back to
-// sensible defaults (production API, 30s HTTP timeout).
+// sensible defaults (production API, 30s HTTP timeout, 3-attempt retry).
 type Config struct {
 	// APIKey authenticates all control-plane calls. Required.
 	APIKey string
@@ -27,6 +27,10 @@ type Config struct {
 	// RequestTimeout bounds every HTTP call to the control plane.
 	// Defaults to 30s when zero.
 	RequestTimeout time.Duration
+	// RetryPolicy controls how transient HTTP failures are retried.
+	// A zero RetryPolicy uses conservative defaults (3 attempts, 200 ms
+	// initial backoff, 5 s maximum backoff).
+	RetryPolicy RetryPolicy
 }
 
 func (c Config) apiBaseURL() string {
